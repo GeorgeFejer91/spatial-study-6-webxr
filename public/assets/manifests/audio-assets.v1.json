@@ -1,0 +1,112 @@
+{
+  "schema": "spatial.study6.webxr.audio_assets.v1",
+  "source": {
+    "repository": "https://github.com/MesmerPrism/spatial-study-6",
+    "revision": "dd41646e02e4a1d73b990626b74048d34ce8f26a",
+    "tree": "0764bcfad349aee20724b3a8fe50c776410fe3d3",
+    "path": "src/spatial-hand-lab-android/app/src/main/assets/study6-audio",
+    "upstream_authority_repository": "https://github.com/MesmerPrism/study-6",
+    "upstream_authority_revision": "994498c9299b3f5d5475047eb32022b629a83473",
+    "upstream_authority_path": "VR implementation/apps/native-renderer-android/study6-assets/neutral-hand-audio/audio",
+    "authority_manifest_sha256": "d7f68613a63af8c6db2e9184af17538270f95076e49e09d5dfa370e6283bb742"
+  },
+  "selection": {
+    "rule": "exact V01-V04 English/German runtime set only",
+    "language_codes": ["de", "en"],
+    "audio_variant_ids": ["V01", "V02", "V03", "V04"],
+    "assignment_policy": "participant permutation assigns V01-V04 by block ordinal; audio variant is orthogonal to the visual placeholder media id",
+    "file_count": 8
+  },
+  "license": "AGPL-3.0-only",
+  "participant_eligibility": "test-only",
+  "files": [
+    {
+      "path": "assets/audio/study6_neutral_hand_audio_V01_DE.mp3",
+      "audio_variant_id": "V01",
+      "language": "de",
+      "bytes": 4801141,
+      "sha256": "5d014a436d5615f407c1c4de1b138870d12d518ee9018096ff79b4b0e2a19a99",
+      "duration_seconds": 300.0,
+      "codec": "mp3",
+      "sample_rate_hz": 44100,
+      "channels": 1
+    },
+    {
+      "path": "assets/audio/study6_neutral_hand_audio_V01_EN.mp3",
+      "audio_variant_id": "V01",
+      "language": "en",
+      "bytes": 4801141,
+      "sha256": "f19134d2be9ea5db8edd8a3ad9caeaa9537a2945f6ccecbcb78c2c4e73a13204",
+      "duration_seconds": 300.0,
+      "codec": "mp3",
+      "sample_rate_hz": 44100,
+      "channels": 1
+    },
+    {
+      "path": "assets/audio/study6_neutral_hand_audio_V02_DE.mp3",
+      "audio_variant_id": "V02",
+      "language": "de",
+      "bytes": 4801141,
+      "sha256": "99088fcdc53d0a0cb5cf637694d7ea5b6bf6754d2e882afb95ab05b2107daa20",
+      "duration_seconds": 300.0,
+      "codec": "mp3",
+      "sample_rate_hz": 44100,
+      "channels": 1
+    },
+    {
+      "path": "assets/audio/study6_neutral_hand_audio_V02_EN.mp3",
+      "audio_variant_id": "V02",
+      "language": "en",
+      "bytes": 4801141,
+      "sha256": "8aab14e85cb9c7343e41c2f4c6064180073fcaa8b0b9ece6a3a4ea1f7d14ff97",
+      "duration_seconds": 300.0,
+      "codec": "mp3",
+      "sample_rate_hz": 44100,
+      "channels": 1
+    },
+    {
+      "path": "assets/audio/study6_neutral_hand_audio_V03_DE.mp3",
+      "audio_variant_id": "V03",
+      "language": "de",
+      "bytes": 4801141,
+      "sha256": "e6e9c2df03dbaea69e6a58d99d5bf9396afc9c8bba0be3f3b42857752d508522",
+      "duration_seconds": 300.0,
+      "codec": "mp3",
+      "sample_rate_hz": 44100,
+      "channels": 1
+    },
+    {
+      "path": "assets/audio/study6_neutral_hand_audio_V03_EN.mp3",
+      "audio_variant_id": "V03",
+      "language": "en",
+      "bytes": 4801141,
+      "sha256": "e98bea3af5100e9e6070d1655c1aba64cb6512a0004d304d18981fe75d465c23",
+      "duration_seconds": 300.0,
+      "codec": "mp3",
+      "sample_rate_hz": 44100,
+      "channels": 1
+    },
+    {
+      "path": "assets/audio/study6_neutral_hand_audio_V04_DE.mp3",
+      "audio_variant_id": "V04",
+      "language": "de",
+      "bytes": 4801141,
+      "sha256": "832e14e7d61931d1f9e3a4d32394adf233c7c5bd6734be68268854c52a80056f",
+      "duration_seconds": 300.0,
+      "codec": "mp3",
+      "sample_rate_hz": 44100,
+      "channels": 1
+    },
+    {
+      "path": "assets/audio/study6_neutral_hand_audio_V04_EN.mp3",
+      "audio_variant_id": "V04",
+      "language": "en",
+      "bytes": 4801141,
+      "sha256": "6624819c4499c47efa549701548aab128ce6d7e95360bf10575289aafc37ffbe",
+      "duration_seconds": 300.0,
+      "codec": "mp3",
+      "sample_rate_hz": 44100,
+      "channels": 1
+    }
+  ]
+}

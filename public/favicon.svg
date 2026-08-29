@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Spatial Study 6">
+  <rect width="64" height="64" rx="15" fill="#080b10"/>
+  <path d="M14 18c0-4 3-7 7-7h22c4 0 7 3 7 7v28c0 4-3 7-7 7H21c-4 0-7-3-7-7z" fill="#f7f5ef"/>
+  <path d="M23 28c0-5 4-9 9-9 4 0 7 2 9 5l-5 3c-1-2-2-3-4-3-3 0-4 2-4 5v1c2-1 4-2 6-2 5 0 9 3 9 8 0 6-5 10-11 10-7 0-11-5-11-13 0-2 1-4 2-5zm9 6c-2 0-4 1-4 3 0 3 2 4 4 4 3 0 5-1 5-4 0-2-2-3-5-3z" fill="#315f9f"/>
+</svg>

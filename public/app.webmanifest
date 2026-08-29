@@ -1,0 +1,15 @@
+{
+  "name": "Spatial Study 6 WebXR",
+  "short_name": "Study 6",
+  "description": "Test-only WebXR implementation of Spatial Study 6.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "browser"],
+  "orientation": "landscape",
+  "background_color": "#080b10",
+  "theme_color": "#080b10",
+  "categories": ["education", "science"]
+}

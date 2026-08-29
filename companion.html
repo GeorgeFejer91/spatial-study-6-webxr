@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://turnservers.vdo.ninja wss://wss.vdo.ninja; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'"
+    />
+    <title>Spatial Study 6 · Companion</title>
+  </head>
+  <body class="companion-page" inert>
+    <main class="companion-shell" aria-labelledby="page-title">
+      <header>
+        <p class="eyebrow">Operator companion · test-only</p>
+        <h1 id="page-title">Spatial Study 6</h1>
+        <p class="lede">
+          A volatile, encrypted peer connection can show the headset spectator view and send only
+          the study commands listed below. This page never records the video.
+        </p>
+      </header>
+
+      <section class="pair-card" aria-labelledby="pair-title">
+        <div>
+          <h2 id="pair-title">Pair with headset</h2>
+          <p id="pairing-summary">Open the one-time companion link shown by the experiment.</p>
+        </div>
+        <label class="pair-input-label" for="pair-input">One-time link or pairing code</label>
+        <div class="pair-row">
+          <input id="pair-input" type="password" autocomplete="off" spellcheck="false" />
+          <button id="apply-pair" class="secondary" type="button">Apply</button>
+        </div>
+        <div class="actions">
+          <button id="connect" type="button" disabled>Connect</button>
+          <button id="disconnect" class="secondary" type="button" disabled>Disconnect</button>
+        </div>
+        <p id="connection-state" class="state" role="status">Not paired.</p>
+        <details>
+          <summary>Privacy and network disclosure</summary>
+          <p>
+            Pairing contacts VDO.Ninja’s public signaling and STUN/TURN infrastructure. A direct
+            WebRTC route can disclose peer IP addresses. The live spectator image may contain text
+            the participant entered. Use only with an authorized operator and stop pairing before
+            leaving the headset unattended.
+          </p>
+        </details>
+      </section>
+
+      <section class="mirror-card" aria-labelledby="mirror-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Live spectator mirror</p>
+            <h2 id="mirror-title">Headset view</h2>
+          </div>
+          <span id="route-badge" class="badge">Offline</span>
+        </div>
+        <div class="video-frame">
+          <video id="spectator-video" autoplay muted playsinline></video>
+          <p id="video-placeholder">The headset image appears after the peer video track connects.</p>
+        </div>
+        <p class="fine-print">
+          This is the WebXR spectator canvas, not a recording or a pixel-exact capture of both
+          headset eye buffers.
+        </p>
+      </section>
+
+      <section class="control-card" aria-labelledby="control-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Bounded control channel</p>
+            <h2 id="control-title">Operator commands</h2>
+          </div>
+        </div>
+        <div class="command-grid" id="commands">
+          <button type="button" data-command="request_status" disabled>Refresh status</button>
+          <button type="button" data-command="recenter_panel" disabled>Recenter panel</button>
+          <button type="button" data-command="start_block" disabled>Start block</button>
+          <button type="button" data-command="pause_media" disabled>Pause media</button>
+          <button type="button" data-command="resume_media" disabled>Resume media</button>
+          <button type="button" data-command="back" disabled>Back</button>
+          <button type="button" data-command="advance" disabled>Advance</button>
+        </div>
+        <p class="fine-print">
+          Commands are authenticated, acknowledged, and rejected unless the experiment’s reducer
+          allows them. The companion cannot enter participant data, answer questionnaires, grant
+          consent, start immersive VR, export records, or erase local data.
+        </p>
+        <p id="command-result" class="state" role="status">No command sent.</p>
+      </section>
+
+      <section class="status-card" aria-labelledby="status-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Non-identifying telemetry</p>
+            <h2 id="status-title">Study status</h2>
+          </div>
+        </div>
+        <dl id="study-status" class="status-grid">
+          <div><dt>Phase</dt><dd data-field="phase">—</dd></div>
+          <div><dt>View</dt><dd data-field="route">—</dd></div>
+          <div><dt>Block</dt><dd data-field="block">—</dd></div>
+          <div><dt>Condition</dt><dd data-field="condition">—</dd></div>
+          <div><dt>Media</dt><dd data-field="media">—</dd></div>
+          <div><dt>Storage</dt><dd data-field="storage">—</dd></div>
+        </dl>
+      </section>
+    </main>
+    <script type="module" src="/src/companion/main.ts"></script>
+  </body>
+</html>

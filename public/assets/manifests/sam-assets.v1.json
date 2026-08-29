@@ -1,0 +1,51 @@
+{
+  "schema": "spatial.study6.webxr.sam_assets.v1",
+  "source": {
+    "repository": "https://github.com/MesmerPrism/spatial-study-6",
+    "revision": "dd41646e02e4a1d73b990626b74048d34ce8f26a",
+    "tree": "0764bcfad349aee20724b3a8fe50c776410fe3d3",
+    "path": "src/spatial-hand-lab-android/app/src/main/assets/questionnaire-assets/sam/raster",
+    "runtime_projection": "src/spatial-hand-lab-android/app/src/main/java/io/github/mesmerprism/spatialstudy6/handlab/SpatialStudy6QuestionnairePanel.kt",
+    "upstream_authority_repository": "https://github.com/MesmerPrism/study-6",
+    "upstream_authority_revision": "994498c9299b3f5d5475047eb32022b629a83473",
+    "panel_contract_sha256": "4222091e6b464a7c502095ac1c124c0a2aeafefb284c564d62360b5f92e22a85"
+  },
+  "license": {
+    "spdx": "BSD-2-Clause",
+    "copyright": "Copyright (c) 2019, Thomas Röggla, Distributed & Interactive Systems",
+    "notice_path": "assets/sam/LICENSE-BSD-2-Clause.txt",
+    "notice_sha256": "8bc509cb9f7749f1bf8e5564ffd4963e0e4dcec7755bfe5447fa45818cc08d08"
+  },
+  "selection": {
+    "file_count": 18,
+    "included_scales": ["valence", "arousal"],
+    "dominance_rendering": {
+      "asset_path": "assets/sam/valence/valence_05.png",
+      "base_width_css_px": 46,
+      "aspect_ratio_height_over_width": 1.07,
+      "panel_native_scale": 1.16,
+      "score_scale_factors": [0.825, 0.99, 1.155, 1.32, 1.54, 1.815, 2.145, 2.475, 2.805],
+      "reason": "The current APK reuses the neutral valence figure and scales it for dominance; no separate dominance PNG is loaded."
+    }
+  },
+  "files": [
+    {"path":"assets/sam/arousal/arousal_01.png","score":1,"bytes":6432,"sha256":"e7ef61d1415a5a27e030f7683f1042a2d63c19097dfc691ccd24b2eef2c5e69b","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/arousal/arousal_02.png","score":2,"bytes":7661,"sha256":"537b882eea3128ae783aa25c45a5df1589213a1cca23fa50b13ad1b31bab3adf","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/arousal/arousal_03.png","score":3,"bytes":8521,"sha256":"935a452bf2ea6d2a46a2223ec8134e2ef9dfe989aeee931cc858bd2946c905d3","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/arousal/arousal_04.png","score":4,"bytes":9385,"sha256":"d074fe7a929e26803864285a9ecf4bdaab5b17b8189b76bfaf383328c21432b4","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/arousal/arousal_05.png","score":5,"bytes":10750,"sha256":"d85076e85969c935f921b50a25a07483ed8f28172b3df0d6b4f5331d53458113","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/arousal/arousal_06.png","score":6,"bytes":12089,"sha256":"5a763a86fd52202e8601c66ef255f46beb9fb79b8b3173a205389117018575c8","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/arousal/arousal_07.png","score":7,"bytes":15446,"sha256":"9949dc737902a62c4220263a5f72c136a9a7dfa45155a033ec83a592fb5fdbdb","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/arousal/arousal_08.png","score":8,"bytes":17468,"sha256":"e0e248c607451dc0fc15bc5f0885270bc76bb991c480b3f7364157914d8223e0","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/arousal/arousal_09.png","score":9,"bytes":22095,"sha256":"8b803b771ad500bf5fa080ba370a940fd1ca636b06017f23d38639530db0f2d5","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/valence/valence_01.png","score":1,"bytes":7024,"sha256":"53e4df0af84b4973817d9095ac3cae3e5b4418c5e6a08324dd036dbbe6124c4b","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/valence/valence_02.png","score":2,"bytes":6853,"sha256":"9c5748724833b9ec892e2bedd35b4619a2011ef5f559494d63a11beaf8293945","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/valence/valence_03.png","score":3,"bytes":6690,"sha256":"96532682fac92cef510ed9739a10c648b334210953129327f465cc9b297f3f00","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/valence/valence_04.png","score":4,"bytes":6408,"sha256":"f28c15f9bf484b142f2fc9cbbe69a0ca0ebde40f4eca12f678f64098e2c0ca3a","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/valence/valence_05.png","score":5,"bytes":6231,"sha256":"2efb007a7c40728adbd96cb4553927cf4c597d0e79a6125c60263ef6ccff1aec","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/valence/valence_06.png","score":6,"bytes":6430,"sha256":"52469efc21db5ae69ffee5dfc5328d06cb4100c556293aa024771b00eb4aadce","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/valence/valence_07.png","score":7,"bytes":6583,"sha256":"5af3fc72496ef305a41c52a737b5ae8beb7a1be54fe330e4951291602ca695de","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/valence/valence_08.png","score":8,"bytes":6647,"sha256":"9680baf1821713ce58c65d50607d19e22b868b30b674c135f5badebf97ab7c8d","width":400,"height":428,"pixel_format":"rgba"},
+    {"path":"assets/sam/valence/valence_09.png","score":9,"bytes":7193,"sha256":"d9110a9357420b032b797d8664ead65cd92b735e6cfc1768e12e132419152d49","width":400,"height":428,"pixel_format":"rgba"}
+  ]
+}

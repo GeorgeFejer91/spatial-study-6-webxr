@@ -1,0 +1,34 @@
+{
+  "schema": "spatial.study6.webxr.asset_licenses.v1",
+  "authorization": {
+    "basis": "Explicit project-owner authorization for public WebXR publication in the implementation request",
+    "date": "2026-08-29",
+    "excluded": [
+      "coupling-kernel mathematics and implementation",
+      "participant names, identifiers, lookup tables, responses, and physiology data",
+      "headset pulls, logs, captures, credentials, pairing material, and signing material"
+    ]
+  },
+  "assets": [
+    {
+      "paths": ["assets/audio/*.mp3"],
+      "description": "Exact eight Study 6 V01-V04 English/German guided-audio runtime files",
+      "spdx": "AGPL-3.0-only",
+      "provenance_manifest": "assets/manifests/audio-assets.v1.json"
+    },
+    {
+      "paths": ["assets/video/*.mp4"],
+      "description": "Generated, labeled, silent placeholder videos; no experimental stimulus content",
+      "spdx": "AGPL-3.0-only",
+      "provenance_manifest": "assets/manifests/placeholder-videos.generated.json"
+    },
+    {
+      "paths": ["assets/sam/**/*.png", "assets/sam/LICENSE-BSD-2-Clause.txt"],
+      "description": "Third-party Self-Assessment Manikin pictographs used by the questionnaire",
+      "spdx": "BSD-2-Clause",
+      "copyright": "Copyright (c) 2019, Thomas Röggla, Distributed & Interactive Systems",
+      "notice": "assets/sam/LICENSE-BSD-2-Clause.txt",
+      "provenance_manifest": "assets/manifests/sam-assets.v1.json"
+    }
+  ]
+}
