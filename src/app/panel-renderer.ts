@@ -354,7 +354,7 @@ export class StudyPanelRenderer {
         })
         root.name = `study6-participant-${participantId}`
         const label = new Text({
-          text: `${participantId}${completedDatasets > 0 ? ` · ${completedDatasets}x` : ''}`,
+          text: `${participantId}${completedDatasets > 0 ? ` | ${completedDatasets}x` : ''}`,
           color: selected ? STUDY_UI_COLORS.accentDark : STUDY_UI_COLORS.text,
           fontSize: 17,
           fontWeight: 'bold',

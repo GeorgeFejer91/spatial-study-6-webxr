@@ -976,7 +976,7 @@ export class StudyController {
       pauseLabel: language === 'de' ? 'Medium pausieren' : 'Pause media',
       resumeLabel: language === 'de' ? 'Medium fortsetzen' : 'Resume media',
     })
-    const displayMessage = [this.localMessage, this.sensorMessage].filter(Boolean).join(' · ')
+    const displayMessage = [this.localMessage, this.sensorMessage].filter(Boolean).join(' | ')
     this.panelRenderer.render(this.state, {
       participantProgress: this.participantProgress,
       localMessage: displayMessage,
@@ -986,7 +986,7 @@ export class StudyController {
     })
     this.shell.setStatus(
       displayMessage ||
-        `${this.state.page.replaceAll('_', ' ')} · WebXR authority · ${this.bridge ? 'APK sensor recorder' : 'sensor-disabled rehearsal'}`,
+        `${this.state.page.replaceAll('_', ' ')} | WebXR authority | ${this.bridge ? 'APK sensor recorder' : 'sensor-disabled rehearsal'}`,
     )
   }
 

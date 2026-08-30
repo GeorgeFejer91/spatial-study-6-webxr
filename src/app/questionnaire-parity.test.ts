@@ -176,7 +176,7 @@ describe('pinned native questionnaire authority', () => {
     expect(property(panel.progress, 'height')).toBe(52)
     expect(property(panel.kioskStatus, 'width')).toBe(142)
     expect(property(panel.kioskStatus, 'height')).toBe(52)
-    expect(property(panel.kioskStatus, 'text')).toBe('Kiosk · Off')
+    expect(property(panel.kioskStatus, 'text')).toBe('Kiosk | Off')
     expect(property(panel.kioskStatus, 'pointerEvents')).toBe('none')
     expect(property(panel.root, 'pixelSize')).toBeCloseTo(0.00125 / 6, 12)
   })

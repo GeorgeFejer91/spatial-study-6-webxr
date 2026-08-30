@@ -150,7 +150,7 @@ export class SpatialStudyPanel {
     this.kioskStatus = new Text({
       width: contract.header.kioskControlWidth,
       height: contract.header.compactControlHeight,
-      text: 'Kiosk · Off',
+      text: 'Kiosk | Off',
       color: STUDY_UI_COLORS.text,
       fontSize: 13,
       fontWeight: 'bold',
