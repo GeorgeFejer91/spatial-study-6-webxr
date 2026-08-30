@@ -97,9 +97,16 @@ export class StudyPanelRenderer {
   private participantDraft = ''
   private demographics: DemographicsDraft = freshDemographicsDraft()
 
-  constructor(panel: SpatialStudyPanel, actions: StudyPanelActions) {
+  constructor(
+    panel: SpatialStudyPanel,
+    actions: StudyPanelActions,
+    initialDemographics?: Demographics,
+  ) {
     this.panel = panel
     this.actions = actions
+    if (initialDemographics) {
+      this.demographics = { ...initialDemographics }
+    }
   }
 
   /** Clears all operator and participant text held only in the live UI tree. */

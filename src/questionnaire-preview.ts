@@ -43,6 +43,16 @@ function previewState(
   experiment.configuration = { variantId: 'DHS', languageCode, timingMode: 'clipped' }
   experiment.currentBlockIndex = 0
   if (state === 'complete') {
+    if (page === 'demographics') {
+      experiment.demographics = {
+        firstName: 'Debug',
+        lastName: 'Preview',
+        ageYears: 30,
+        handedness: 'right',
+        gender: 'prefer_not_to_say',
+        consentConfirmed: true,
+      }
+    }
     Object.assign(experiment.assessmentDraft, {
       samValence: 5,
       samArousal: 6,
@@ -177,7 +187,7 @@ const actions: StudyPanelActions = {
   startNewSession: () => undefined,
 }
 
-const renderer = new StudyPanelRenderer(panel, actions)
+const renderer = new StudyPanelRenderer(panel, actions, state.demographics ?? undefined)
 if (initialMode === 'direct') panel.setInteractionMode('direct')
 render()
 

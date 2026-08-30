@@ -139,8 +139,7 @@ const ENGLISH_COPY = {
     "Participant id belongs to the other Study 6 variant.",
   "validation.participant_used":
     "Participant id has already been recorded in this browser.",
-  "validation.demographics":
-    "Complete first name, last name, age, handedness, gender, and consent.",
+  "validation.demographics": "Required: age from 0 to 120.",
   "validation.sam": "Select all three SAM values.",
   "validation.affect": "Touch both affect sliders once.",
   "validation.emotions": "Touch all six emotion sliders once.",

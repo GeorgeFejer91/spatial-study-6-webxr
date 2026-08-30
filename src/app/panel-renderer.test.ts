@@ -17,6 +17,30 @@ interface RendererDrafts {
 }
 
 describe('StudyPanelRenderer transient privacy boundary', () => {
+  it('can initialize the native demographics parity fixture without persistent storage', () => {
+    const renderer = new StudyPanelRenderer(
+      {} as SpatialStudyPanel,
+      {} as StudyPanelActions,
+      {
+        firstName: 'Debug',
+        lastName: 'Preview',
+        ageYears: 30,
+        handedness: 'right',
+        gender: 'prefer_not_to_say',
+        consentConfirmed: true,
+      },
+    )
+
+    expect((renderer as unknown as RendererDrafts).demographics).toEqual({
+      firstName: 'Debug',
+      lastName: 'Preview',
+      ageYears: 30,
+      handedness: 'right',
+      gender: 'prefer_not_to_say',
+      consentConfirmed: true,
+    })
+  })
+
   it('clears setup, participant, demographics, consent, and keypad drafts', () => {
     const renderer = new StudyPanelRenderer(
       {} as SpatialStudyPanel,
