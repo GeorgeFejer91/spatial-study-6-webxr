@@ -87,22 +87,73 @@ function sliderValue(value: number, signed: boolean): string {
   return String(value)
 }
 
+interface UIKitGestureEvent {
+  uv?: { x: number }
+  pointerId?: number
+  stopPropagation?: () => void
+  stopImmediatePropagation?: () => void
+}
+
+type PointerCaptureContainer = Container & {
+  setPointerCapture?: (pointerId: number) => void
+  releasePointerCapture?: (pointerId: number) => void
+}
+
+const SLIDER_HORIZONTAL_INSET = 18
+
+function stopParentGesture(event: UIKitGestureEvent): void {
+  // Mirrors Android requestDisallowInterceptTouchEvent(true): a slider or SAM
+  // drag must never turn into a parent-panel scroll gesture.
+  event.stopImmediatePropagation?.()
+  event.stopPropagation?.()
+}
+
+function capturePointer(target: Container, pointerId: number | undefined): void {
+  if (pointerId === undefined) return
+  ;(target as PointerCaptureContainer).setPointerCapture?.(pointerId)
+}
+
+function releasePointer(target: Container, pointerId: number | undefined): void {
+  if (pointerId === undefined) return
+  ;(target as PointerCaptureContainer).releasePointerCapture?.(pointerId)
+}
+
+function finiteUvX(event: UIKitGestureEvent): number | undefined {
+  const value = event.uv?.x
+  return value !== undefined && Number.isFinite(value) ? value : undefined
+}
+
 /** UIKit projection of the native WideSeekBarTouchFrame. */
 export function spatialScale(options: SpatialScaleOptions): Container {
   const contract = QUESTIONNAIRE_VISUAL_CONTRACT
   const width = options.width ?? 1024
   const span = options.maximum - options.minimum
-  const percent = span === 0 ? 0 : clamp((options.value - options.minimum) / span, 0, 1)
-  const bubbleLeft = clamp(
-    percent * width - contract.slider.valueBubbleWidth / 2,
-    0,
-    width - contract.slider.valueBubbleWidth,
-  )
-  const thumbLeft = clamp(
-    percent * width - contract.slider.thumbSize / 2,
-    0,
-    width - contract.slider.thumbSize,
-  )
+  const usableWidth = Math.max(1, width - SLIDER_HORIZONTAL_INSET * 2)
+  let visualValue = clamp(Math.round(options.value), options.minimum, options.maximum)
+  let dragging = false
+  let activePointerId: number | undefined
+
+  const percentFor = (value: number) =>
+    span === 0 ? 0 : clamp((value - options.minimum) / span, 0, 1)
+  const bubbleLeftFor = (value: number) =>
+    clamp(
+      SLIDER_HORIZONTAL_INSET + percentFor(value) * usableWidth - contract.slider.valueBubbleWidth / 2,
+      0,
+      width - contract.slider.valueBubbleWidth,
+    )
+  const thumbLeftFor = (value: number) =>
+    clamp(
+      SLIDER_HORIZONTAL_INSET + percentFor(value) * usableWidth - contract.slider.thumbSize / 2,
+      0,
+      width - contract.slider.thumbSize,
+    )
+  const valueFromEvent = (event: UIKitGestureEvent): number | undefined => {
+    const uvX = finiteUvX(event)
+    if (uvX === undefined) return undefined
+    const logicalX = clamp(uvX * width, SLIDER_HORIZONTAL_INSET, width - SLIDER_HORIZONTAL_INSET)
+    const normalized = (logicalX - SLIDER_HORIZONTAL_INSET) / usableWidth
+    return Math.round(options.minimum + normalized * span)
+  }
 
   const root = new Container({
     width,
@@ -121,16 +172,72 @@ export function spatialScale(options: SpatialScaleOptions): Container {
     fontWeight: 'bold',
   })
 
-  const shell = new Container({
+  let fill: Container | undefined
+  let thumb: Container
+  let bubble: Container
+  let bubbleText: Text
+
+  const projectValue = (value: number): void => {
+    visualValue = clamp(Math.round(value), options.minimum, options.maximum)
+    const percent = percentFor(visualValue)
+    fill?.setProperties({ width: percent * usableWidth })
+    thumb?.setProperties({ positionLeft: thumbLeftFor(visualValue) })
+    bubble?.setProperties({ positionLeft: bubbleLeftFor(visualValue) })
+    bubbleText?.setProperties({ text: sliderValue(visualValue, options.signed ?? false) })
+  }
+
+  const belongsToActiveGesture = (event: UIKitGestureEvent): boolean =>
+    dragging &&
+    (activePointerId === undefined || event.pointerId === undefined || event.pointerId === activePointerId)
+
+  const shell: Container = new Container({
     width,
     height: contract.slider.touchShellHeight,
     positionType: 'relative',
     cursor: 'pointer',
     pointerEvents: 'auto',
     overflow: 'visible',
-    onClick: (event) => {
-      const normalized = clamp(event.uv?.x ?? 0.5, 0, 1)
-      options.onChange(Math.round(options.minimum + normalized * span))
+    onPointerDown: (event: UIKitGestureEvent) => {
+      stopParentGesture(event)
+      if (dragging) return
+      dragging = true
+      activePointerId = event.pointerId
+      capturePointer(shell, activePointerId)
+      const value = valueFromEvent(event)
+      if (value !== undefined) projectValue(value)
+    },
+    onPointerMove: (event: UIKitGestureEvent) => {
+      if (!dragging) return
+      stopParentGesture(event)
+      if (!belongsToActiveGesture(event)) return
+      const value = valueFromEvent(event)
+      if (value !== undefined) projectValue(value)
+    },
+    onPointerUp: (event: UIKitGestureEvent) => {
+      if (!dragging) return
+      stopParentGesture(event)
+      if (!belongsToActiveGesture(event)) return
+      const value = valueFromEvent(event)
+      if (value !== undefined) projectValue(value)
+      const pointerId = activePointerId
+      dragging = false
+      activePointerId = undefined
+      releasePointer(shell, pointerId)
+      // Persist only after capture is finished. Persisting every move causes
+      // the controller to rerender and dispose the captured UIKit object.
+      options.onChange(visualValue)
+    },
+    onPointerCancel: (event: UIKitGestureEvent) => {
+      if (!dragging) return
+      stopParentGesture(event)
+      if (!belongsToActiveGesture(event)) return
+      const pointerId = activePointerId
+      dragging = false
+      activePointerId = undefined
+      releasePointer(shell, pointerId)
+      // Android's WideSeekBarTouchFrame has already applied the last MOVE when
+      // it receives ACTION_CANCEL, so retain that same last visible value.
+      options.onChange(visualValue)
     },
   })
   shell.name = `${root.name}-touch-shell`
@@ -150,11 +257,11 @@ export function spatialScale(options: SpatialScaleOptions): Container {
   }
 
   const track = new Container({
-    width,
+    width: usableWidth,
     height: contract.slider.trackHeight,
     positionType: 'absolute',
     positionTop: 58,
-    positionLeft: 0,
+    positionLeft: SLIDER_HORIZONTAL_INSET,
     backgroundColor: '#e2e8f0',
     borderColor: '#94a3b8',
     borderWidth: 1,
@@ -164,8 +271,8 @@ export function spatialScale(options: SpatialScaleOptions): Container {
   })
   track.name = `${root.name}-track`
   if (options.showFill) {
-    const fill = new Container({
-      width: percent * width,
+    fill = new Container({
+      width: percentFor(visualValue) * usableWidth,
       height: '100%',
       backgroundColor: STUDY_UI_COLORS.accent,
       borderRadius: 6,
@@ -175,12 +282,12 @@ export function spatialScale(options: SpatialScaleOptions): Container {
     track.add(fill)
   }
 
-  const thumb = new Container({
+  thumb = new Container({
     width: contract.slider.thumbSize,
     height: contract.slider.thumbSize,
     positionType: 'absolute',
     positionTop: 49,
-    positionLeft: thumbLeft,
+    positionLeft: thumbLeftFor(visualValue),
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: STUDY_UI_COLORS.accentDark,
@@ -210,12 +317,12 @@ export function spatialScale(options: SpatialScaleOptions): Container {
     }),
   )
 
-  const bubble = new Container({
+  bubble = new Container({
     width: contract.slider.valueBubbleWidth,
     height: contract.slider.valueBubbleHeight,
     positionType: 'absolute',
     positionTop: 2,
-    positionLeft: bubbleLeft,
+    positionLeft: bubbleLeftFor(visualValue),
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: STUDY_UI_COLORS.panelRaised,
@@ -225,16 +332,15 @@ export function spatialScale(options: SpatialScaleOptions): Container {
     pointerEvents: 'none',
   })
   bubble.name = `${root.name}-value-bubble`
-  bubble.add(
-    new Text({
-      text: sliderValue(options.value, options.signed ?? false),
-      color: STUDY_UI_COLORS.text,
-      fontSize: contract.slider.valueBubbleTextSize,
-      fontWeight: 'bold',
-      textAlign: 'center',
-      pointerEvents: 'none',
-    }),
-  )
+  bubbleText = new Text({
+    text: sliderValue(visualValue, options.signed ?? false),
+    color: STUDY_UI_COLORS.text,
+    fontSize: contract.slider.valueBubbleTextSize,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    pointerEvents: 'none',
+  })
+  bubble.add(bubbleText)
 
   shell.add(track, thumb, bubble)
 
@@ -296,6 +402,11 @@ export function samRow(options: {
   onSelect: (value: number) => void
 }): Container {
   const contract = QUESTIONNAIRE_VISUAL_CONTRACT.sam
+  let visualSelection = options.selected
+  let committedSelection = options.selected
+  let dragging = false
+  let activePointerId: number | undefined
+  const cards: Array<{ card: Container; number: Text; score: number }> = []
   const root = new Container({
     width: '100%',
     flexDirection: 'column',
@@ -344,6 +455,7 @@ export function samRow(options: {
   const choices = new Container({
     width: contract.optionsWidth,
     height: contract.rowHeight,
+    positionType: 'relative',
     flexDirection: 'row',
     alignItems: 'center',
     gapColumn: contract.cardGap,
@@ -369,9 +481,7 @@ export function samRow(options: {
       borderWidth: selected ? 2 : 1,
       borderRadius: contract.cardRadius,
       overflow: 'visible',
-      cursor: 'pointer',
-      pointerEvents: 'auto',
-      onClick: () => options.onSelect(score),
+      pointerEvents: 'none',
     })
     card.name = `${root.name}-choice-${score}`
     const source =
@@ -409,8 +519,109 @@ export function samRow(options: {
       number.setProperties({ color: STUDY_UI_COLORS.accentDark, fontWeight: 'bold' })
     }
     card.add(image, number)
+    cards.push({ card, number, score })
     choices.add(card)
   }
+
+  const projectSelection = (value: number): void => {
+    if (value < 1 || value > 9 || value === visualSelection) return
+    visualSelection = value
+    for (const entry of cards) {
+      const selected = entry.score === value
+      entry.card.setProperties({
+        backgroundColor: selected ? STUDY_UI_COLORS.selected : STUDY_UI_COLORS.panelRaised,
+        borderColor: selected ? STUDY_UI_COLORS.selectedBorder : STUDY_UI_COLORS.border,
+        borderWidth: selected ? 2 : 1,
+      })
+      entry.number.setProperties({
+        color: selected ? STUDY_UI_COLORS.accentDark : STUDY_UI_COLORS.textMuted,
+        fontWeight: selected ? 'bold' : 'normal',
+      })
+    }
+  }
+
+  const valueFromEvent = (event: UIKitGestureEvent): number | undefined => {
+    const uvX = finiteUvX(event)
+    if (uvX === undefined) return undefined
+    const logicalX = clamp(uvX, 0, 1) * contract.optionsWidth
+    let nearestScore = 1
+    let nearestDistance = Number.POSITIVE_INFINITY
+    for (let score = 1; score <= 9; score += 1) {
+      const center =
+        contract.cardWidth / 2 + (score - 1) * (contract.cardWidth + contract.cardGap)
+      const distance = Math.abs(logicalX - center)
+      if (distance < nearestDistance) {
+        nearestDistance = distance
+        nearestScore = score
+      }
+    }
+    return nearestScore
+  }
+
+  const belongsToActiveGesture = (event: UIKitGestureEvent): boolean =>
+    dragging &&
+    (activePointerId === undefined || event.pointerId === undefined || event.pointerId === activePointerId)
+
+  const commitSelection = (): void => {
+    if (visualSelection !== null && visualSelection !== committedSelection) {
+      committedSelection = visualSelection
+      options.onSelect(visualSelection)
+    }
+  }
+
+  // One row-wide hit overlay mirrors SamChoiceHitOverlayView. It deliberately
+  // spans the full 139 px row rather than the 93 px cards, so overflow figures
+  // and the gaps between them resolve to the nearest pictograph.
+  const hitOverlay: Container = new Container({
+    width: contract.optionsWidth,
+    height: contract.rowHeight,
+    positionType: 'absolute',
+    positionTop: 0,
+    positionLeft: 0,
+    overflow: 'visible',
+    cursor: 'pointer',
+    pointerEvents: 'auto',
+    onPointerDown: (event: UIKitGestureEvent) => {
+      stopParentGesture(event)
+      if (dragging) return
+      dragging = true
+      activePointerId = event.pointerId
+      capturePointer(hitOverlay, activePointerId)
+      const value = valueFromEvent(event)
+      if (value !== undefined) projectSelection(value)
+    },
+    onPointerMove: (event: UIKitGestureEvent) => {
+      if (!dragging) return
+      stopParentGesture(event)
+      if (!belongsToActiveGesture(event)) return
+      const value = valueFromEvent(event)
+      if (value !== undefined) projectSelection(value)
+    },
+    onPointerUp: (event: UIKitGestureEvent) => {
+      if (!dragging) return
+      stopParentGesture(event)
+      if (!belongsToActiveGesture(event)) return
+      const value = valueFromEvent(event)
+      if (value !== undefined) projectSelection(value)
+      const pointerId = activePointerId
+      dragging = false
+      activePointerId = undefined
+      releasePointer(hitOverlay, pointerId)
+      commitSelection()
+    },
+    onPointerCancel: (event: UIKitGestureEvent) => {
+      if (!dragging) return
+      stopParentGesture(event)
+      if (!belongsToActiveGesture(event)) return
+      const pointerId = activePointerId
+      dragging = false
+      activePointerId = undefined
+      releasePointer(hitOverlay, pointerId)
+      commitSelection()
+    },
+  })
+  hitOverlay.name = `${root.name}-hit-overlay`
+  choices.add(hitOverlay)
 
   const low = sideLabel(options.lowLabel, `${root.name}-low-label`)
   low.setProperties({ marginRight: contract.sideLabelGap })

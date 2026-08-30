@@ -26,6 +26,7 @@ const sensorDisabledRehearsal =
 const shell = createBrowserStudyShell(app)
 let runtime: StudyXRRuntime
 const panel = new SpatialStudyPanel({
+  allowDirectMode: false,
   onInteractionModeChange: (mode) => runtime?.setPanelInteractionMode(mode),
 })
 let controller: StudyController | undefined

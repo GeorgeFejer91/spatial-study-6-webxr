@@ -171,6 +171,16 @@ direct native-APK/WebXR surface comparison and is not participant evidence.
 
 Questionnaire geometry, palette, controls, and navigation are regression-bound
 to the pinned native Android panel in `src/ui/questionnaire-contract.ts`.
+The participant route is pointer-only: it exposes no Direct-mode or panel-drag
+control, disables body scrolling on the four assessment pages, and reserves
+repositioning for explicit operator recenter plus the native-matching 0.75 m
+viewer-drift guard. The parity-preview route alone may opt into Direct mode.
+
+Before an immersive session starts, the runtime requests a 1.25 WebXR
+framebuffer scale and 0.25 fixed foveation to improve small-text clarity over
+Three.js defaults. The SAM PNGs remain the native-authoritative raster assets:
+at their actual panel size they are already approximately 4–7 times
+oversampled, while the available UIKit SVG path drops their stroke-only paths.
 Passing host tests does not establish visual parity: final acceptance still
 requires attended empty/completed page comparisons in Quest Browser against
 the exact native APK visual oracle.

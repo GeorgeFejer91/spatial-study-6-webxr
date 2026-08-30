@@ -20,6 +20,15 @@ import {
   type StudyPanelInteractionMode,
 } from '../ui/constants.ts'
 import { QUESTIONNAIRE_VISUAL_CONTRACT } from '../ui/questionnaire-contract.ts'
+import {
+  configureStudyXRRenderQuality,
+  type StudyXRRenderQualityOptions,
+} from './render-quality.ts'
+import {
+  advanceStudyPanelAnchorPoll,
+  resolveStudyPanelInteractionMode,
+  shouldReanchorStudyPanel,
+} from './panel-placement.ts'
 
 export type XRHandedInputMode = 'none' | 'controller' | 'hand'
 
@@ -38,6 +47,10 @@ export interface StudyXRRuntimeOptions {
   canvas: HTMLCanvasElement
   panelDistance?: number
   maxPixelRatio?: number
+  xrFramebufferScaleFactor?: number
+  xrFixedFoveation?: number
+  /** Enables the native one-sixth direct-touch placement in explicit QA routes only. */
+  allowDirectMode?: boolean
   requestHandTracking?: boolean
   onFrame?: (context: StudyXRFrameContext) => void
   onXRStateChange?: (presenting: boolean) => void
@@ -82,6 +95,7 @@ export interface StudyXRRuntime {
 const scratchHeadPosition = new Vector3()
 const scratchHeadQuaternion = new Quaternion()
 const scratchForward = new Vector3()
+const scratchPanelTarget = new Vector3()
 
 function sourceMode(source: ReturnType<XRInputManager['getPrimaryInputSource']>): XRHandedInputMode {
   if (!source) return 'none'
@@ -106,6 +120,10 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
     powerPreference: 'high-performance',
   })
   renderer.xr.enabled = true
+  configureStudyXRRenderQuality(renderer.xr, {
+    framebufferScaleFactor: options.xrFramebufferScaleFactor,
+    fixedFoveation: options.xrFixedFoveation,
+  } satisfies StudyXRRenderQualityOptions)
   renderer.xr.setReferenceSpaceType('local-floor')
   renderer.localClippingEnabled = true
   renderer.setClearColor(STUDY_UI_COLORS.world, 1)
@@ -127,9 +145,11 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
   let lastTime: number | undefined
   let recenterOnNextFrame = false
   let inputSnapshot: XRInputModeSnapshot = { left: 'none', right: 'none' }
+  let anchorPollElapsedMilliseconds = 0
 
   let panelDistance = options.panelDistance ?? STUDY_PANEL_DISTANCE_METERS
   let panelVerticalOffset = 0
+  const allowDirectMode = options.allowDirectMode === true
   const maxPixelRatio = options.maxPixelRatio ?? 2
 
   const resize = () => {
@@ -153,9 +173,7 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
   resizeObserver.observe(options.canvas.parentElement ?? options.canvas)
   resize()
 
-  const recenterPanel = () => {
-    if (!primaryUiRoot) return
-
+  const computePanelTarget = (target: Vector3): Vector3 => {
     const source = renderer.xr.isPresenting ? input.xrOrigin.head : camera
     source.getWorldPosition(scratchHeadPosition)
     source.getWorldQuaternion(scratchHeadQuaternion)
@@ -163,21 +181,38 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
     if (scratchForward.lengthSq() < 0.0001) scratchForward.set(0, 0, -1)
     scratchForward.normalize()
 
-    primaryUiRoot.position
+    target
       .copy(scratchHeadPosition)
       .addScaledVector(scratchForward, panelDistance)
-    primaryUiRoot.position.y += panelVerticalOffset
+    target.y += panelVerticalOffset
+    return target
+  }
+
+  const recenterPanel = () => {
+    anchorPollElapsedMilliseconds = 0
+    if (!primaryUiRoot) return
+
+    computePanelTarget(scratchPanelTarget)
+    primaryUiRoot.position.copy(scratchPanelTarget)
     primaryUiRoot.lookAt(scratchHeadPosition.x, scratchHeadPosition.y, scratchHeadPosition.z)
     primaryUiRoot.updateMatrixWorld(true)
   }
 
+  const isQuestionnaireAnchorActive = (): boolean => {
+    if (!primaryUiRoot?.visible) return false
+    const panel = primaryUiRoot.getObjectByName('study6-spatial-panel')
+    return panel?.visible ?? true
+  }
+
   renderer.xr.addEventListener('sessionstart', () => {
     lastTime = undefined
+    anchorPollElapsedMilliseconds = 0
     recenterOnNextFrame = true
     options.onXRStateChange?.(true)
   })
   renderer.xr.addEventListener('sessionend', () => {
     lastTime = undefined
+    anchorPollElapsedMilliseconds = 0
     inputSnapshot = { left: 'none', right: 'none' }
     options.onInputModeChange?.(inputSnapshot)
     options.onXRStateChange?.(false)
@@ -203,6 +238,23 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
     if (recenterOnNextFrame) {
       recenterOnNextFrame = false
       recenterPanel()
+    }
+
+    const anchorPoll = advanceStudyPanelAnchorPoll(
+      anchorPollElapsedMilliseconds,
+      deltaMilliseconds,
+      renderer.xr.isPresenting && isQuestionnaireAnchorActive(),
+    )
+    anchorPollElapsedMilliseconds = anchorPoll.elapsedMilliseconds
+    if (anchorPoll.shouldPoll && primaryUiRoot) {
+      computePanelTarget(scratchPanelTarget)
+      if (
+        shouldReanchorStudyPanel(
+          primaryUiRoot.position.distanceToSquared(scratchPanelTarget),
+        )
+      ) {
+        recenterPanel()
+      }
     }
 
     uiRoots.forEach((root) => root.update(deltaMilliseconds))
@@ -257,6 +309,7 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
       scene.add(root)
       if (primary) {
         primaryUiRoot = root
+        anchorPollElapsedMilliseconds = 0
         root.position.set(
           0,
           STUDY_PANEL_CENTER_HEIGHT_METERS,
@@ -267,14 +320,18 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
     detachUiRoot: (root: UikitRoot) => {
       uiRoots.delete(root)
       root.removeFromParent()
-      if (root === primaryUiRoot) primaryUiRoot = undefined
+      if (root === primaryUiRoot) {
+        primaryUiRoot = undefined
+        anchorPollElapsedMilliseconds = 0
+      }
     },
     isImmersiveSupported,
     enterXR,
     exitXR,
     recenterPanel,
     setPanelInteractionMode: (mode) => {
-      if (mode === 'direct') {
+      const effectiveMode = resolveStudyPanelInteractionMode(mode, allowDirectMode)
+      if (effectiveMode === 'direct') {
         panelDistance = QUESTIONNAIRE_VISUAL_CONTRACT.panel.directDistanceMeters
         panelVerticalOffset = QUESTIONNAIRE_VISUAL_CONTRACT.panel.directVerticalOffsetMeters
       } else {

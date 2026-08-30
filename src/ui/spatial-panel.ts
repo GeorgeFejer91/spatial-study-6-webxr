@@ -24,6 +24,8 @@ export interface SpatialStudyPanelOptions {
   footerHint?: string
   footerStatus?: string
   footerStatusTone?: StudyStatusTone
+  /** Direct-touch placement is a parity/QA route, never a production default. */
+  allowDirectMode?: boolean
   onInteractionModeChange?: (mode: StudyPanelInteractionMode) => void
 }
 
@@ -58,10 +60,12 @@ export class SpatialStudyPanel {
   private interactionMode: StudyPanelInteractionMode = 'pointer'
   private interactionControlVisible = false
   private demographicsLayout = false
+  private readonly allowDirectMode: boolean
   private readonly onInteractionModeChange?: (mode: StudyPanelInteractionMode) => void
 
   constructor(options: SpatialStudyPanelOptions = {}) {
     const contract = QUESTIONNAIRE_VISUAL_CONTRACT
+    this.allowDirectMode = options.allowDirectMode ?? false
     this.onInteractionModeChange = options.onInteractionModeChange
     this.root = new Container({
       width: STUDY_PANEL_WIDTH_PX,
@@ -138,7 +142,7 @@ export class SpatialStudyPanel {
       cursor: 'pointer',
       pointerEvents: 'auto',
       onClick: () => {
-        if (!this.interactionControlVisible) return
+        if (!this.interactionControlVisible || !this.allowDirectMode) return
         this.setInteractionMode(this.interactionMode === 'pointer' ? 'direct' : 'pointer')
       },
     })
@@ -169,7 +173,7 @@ export class SpatialStudyPanel {
       gapRow: 0,
       paddingTop: contract.body.paddingTop,
       paddingBottom: contract.body.paddingBottom,
-      overflow: 'scroll',
+      overflow: 'hidden',
     })
     this.body.name = 'study6-spatial-panel-body'
 
@@ -239,17 +243,22 @@ export class SpatialStudyPanel {
 
   setInteractionModeControlVisible(visible: boolean): void {
     this.interactionControlVisible = visible
+    const switchable = visible && this.allowDirectMode
     this.progress.setProperties({
-      display: visible ? 'flex' : 'none',
-      pointerEvents: visible ? 'auto' : 'none',
-      cursor: visible ? 'pointer' : 'default',
+      display: switchable ? 'flex' : 'none',
+      pointerEvents: switchable ? 'auto' : 'none',
+      cursor: switchable ? 'pointer' : 'default',
     })
     this.kioskStatus.setProperties({ display: visible ? 'flex' : 'none' })
     if (visible) this.projectInteractionMode()
   }
 
-  setInteractionMode(mode: StudyPanelInteractionMode): void {
-    if (mode === this.interactionMode) return
+  setInteractionMode(mode: StudyPanelInteractionMode): boolean {
+    if (mode === 'direct' && !this.allowDirectMode) {
+      this.projectInteractionMode()
+      return false
+    }
+    if (mode === this.interactionMode) return true
     this.interactionMode = mode
     const pixelSize =
       mode === 'direct'
@@ -258,10 +267,11 @@ export class SpatialStudyPanel {
     this.root.setProperties({ pixelSize })
     this.projectInteractionMode()
     this.onInteractionModeChange?.(mode)
+    return true
   }
 
   private projectInteractionMode(): void {
-    const direct = this.interactionMode === 'direct'
+    const direct = this.allowDirectMode && this.interactionMode === 'direct'
     this.progress.setProperties({
       text: direct ? 'Direct mode' : 'Pointer mode',
       color: direct ? STUDY_UI_COLORS.accentDark : STUDY_UI_COLORS.text,
@@ -271,6 +281,19 @@ export class SpatialStudyPanel {
         ? QUESTIONNAIRE_VISUAL_CONTRACT.button.selectedBorderWidth
         : QUESTIONNAIRE_VISUAL_CONTRACT.button.borderWidth,
     })
+  }
+
+  /**
+   * Enables scrolling only for pages whose measured content requires it.
+   * Resetting on page transitions prevents a prior long page from translating
+   * the next page, while same-page state updates retain the participant's
+   * reading position.
+   */
+  setBodyScrollable(scrollable: boolean, reset = false): void {
+    this.body.setProperties({ overflow: scrollable ? 'scroll' : 'hidden' })
+    if (scrollable && !reset) return
+    this.body.scrollPosition.value = [0, 0]
+    this.body.scrollVelocity.set(0, 0)
   }
 
   setFooter(options: {

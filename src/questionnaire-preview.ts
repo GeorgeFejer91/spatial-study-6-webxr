@@ -102,10 +102,12 @@ const shell = createBrowserStudyShell(app, {
 })
 let runtime: StudyXRRuntime
 const panel = new SpatialStudyPanel({
+  allowDirectMode: true,
   onInteractionModeChange: (mode) => runtime?.setPanelInteractionMode(mode),
 })
 runtime = createStudyXRRuntime({
   canvas: shell.canvas,
+  allowDirectMode: true,
   requestHandTracking: false,
   onXRStateChange: (presenting) => shell.setXRPresenting(presenting),
   onInputModeChange: ({ left, right }) =>

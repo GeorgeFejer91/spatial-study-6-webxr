@@ -55,6 +55,16 @@ interface DemographicsDraft {
   consentConfirmed: boolean
 }
 
+const SCROLLABLE_PANEL_PAGES = new Set<ExperimentState['page']>([
+  'operator_setup',
+  'participant_id',
+  'demographics',
+  'block_ready',
+  'technical_hold',
+  'aborted',
+  'complete',
+])
+
 function freshSetupDraft(): SetupDraft {
   return { languageCode: 'en', variantId: null, timingMode: 'full' }
 }
@@ -101,6 +111,7 @@ export interface StudyPanelRenderContext {
 export class StudyPanelRenderer {
   private readonly panel: SpatialStudyPanel
   private readonly actions: StudyPanelActions
+  private renderedPage: ExperimentState['page'] | undefined
   private setup: SetupDraft = freshSetupDraft()
   private participantDraft = ''
   private demographics: DemographicsDraft = freshDemographicsDraft()
@@ -119,6 +130,7 @@ export class StudyPanelRenderer {
 
   /** Clears all operator and participant text held only in the live UI tree. */
   resetTransientState(): void {
+    this.renderedPage = undefined
     this.setup = freshSetupDraft()
     this.participantDraft = ''
     this.demographics = freshDemographicsDraft()
@@ -132,6 +144,9 @@ export class StudyPanelRenderer {
       state.page === 'emotion_representation_vas' ||
       state.page === 'hand_embodiment'
     this.panel.setVisible(state.page !== 'stimulus')
+    const pageChanged = this.renderedPage !== state.page
+    this.panel.setBodyScrollable(SCROLLABLE_PANEL_PAGES.has(state.page), pageChanged)
+    this.renderedPage = state.page
     this.panel.setDemographicsLayout(state.page === 'demographics')
     this.panel.setInteractionModeControlVisible(
       state.page !== 'operator_setup' && state.page !== 'stimulus',
