@@ -96,6 +96,7 @@ const panel = new SpatialStudyPanel({
 })
 runtime = createStudyXRRuntime({
   canvas: shell.canvas,
+  requestHandTracking: false,
   onXRStateChange: (presenting) => shell.setXRPresenting(presenting),
   onInputModeChange: ({ left, right }) =>
     shell.setStatus(`questionnaire parity | ${pageToken} | ${stateToken} | ${left}/${right}`),

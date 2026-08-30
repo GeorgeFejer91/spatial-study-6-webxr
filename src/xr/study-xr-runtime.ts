@@ -38,9 +38,19 @@ export interface StudyXRRuntimeOptions {
   canvas: HTMLCanvasElement
   panelDistance?: number
   maxPixelRatio?: number
+  requestHandTracking?: boolean
   onFrame?: (context: StudyXRFrameContext) => void
   onXRStateChange?: (presenting: boolean) => void
   onInputModeChange?: (snapshot: XRInputModeSnapshot) => void
+}
+
+export function createStudyXRSessionInit(requestHandTracking = true): XRSessionInit {
+  return {
+    requiredFeatures: ['local-floor'],
+    optionalFeatures: requestHandTracking
+      ? ['hand-tracking', 'bounded-floor']
+      : ['bounded-floor'],
+  }
 }
 
 const localOnlyVisualLoader: XRAssetLoader = {
@@ -220,10 +230,10 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
     if (!xr || !window.isSecureContext) {
       throw new DOMException('Immersive WebXR is unavailable.', 'NotSupportedError')
     }
-    const session = await xr.requestSession('immersive-vr', {
-      requiredFeatures: ['local-floor'],
-      optionalFeatures: ['hand-tracking', 'bounded-floor'],
-    })
+    const session = await xr.requestSession(
+      'immersive-vr',
+      createStudyXRSessionInit(options.requestHandTracking !== false),
+    )
     try {
       await renderer.xr.setSession(session)
     } catch (error) {
