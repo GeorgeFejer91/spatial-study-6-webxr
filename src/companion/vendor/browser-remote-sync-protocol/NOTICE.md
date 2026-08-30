@@ -5,9 +5,9 @@ Protocol (BRSP/1) reference core from
 <https://github.com/GeorgeFejer91/browser-remote-sync-protocol>.
 
 - Upstream version: `0.1.0`
-- Upstream commit: `17b5cdba9d4ac01d6d70bfccf83daf492b5e3d11`
-- Upstream Git blob (`src/brsp.js`): `825fa28479dfb6b0503b236acfc74ee8cba8fdf3`
-- SHA-256 of the canonical LF source: `59e3c02ed15042e70b1b11e77bc2c6bd835a3839ee04b1b617dd529137261ef9`
+- Upstream commit: `62ff66c6df724847c1e54161feabb470b67b1192`
+- Upstream Git blob (`src/brsp.js`): `67e1af86eff556d681d3370aef8d515ca95011fc`
+- SHA-256 of the canonical LF source: `7f28058297388a128e3acfc146248b627921d4629b8f3a575d80d3f6ff0b6911`
 - License: MIT; the complete upstream license is retained in
   `LICENSE-MIT.txt`.
 

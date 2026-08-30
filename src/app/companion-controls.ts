@@ -40,7 +40,7 @@ export class CompanionControls {
   constructor(options: CompanionControlsOptions) {
     this.options = options
     this.enableButton = button('Companion')
-    this.enableButton.title = 'Pair a private spectator/control companion'
+    this.enableButton.title = 'Pair a private status and control companion'
     options.slot.append(this.enableButton)
 
     this.dialog = document.createElement('dialog')
@@ -50,8 +50,10 @@ export class CompanionControls {
         <div><span>VOLATILE PEER SESSION</span><h2>Browser companion</h2></div>
         <button type="button" data-close aria-label="Close">×</button>
       </div>
-      <p>Enable pairing only while an authorized operator is present. BRSP performs mutual pairing-secret proof and scopes every command over VDO.Ninja WebRTC. Public signaling/STUN/TURN is still used, and a direct route can disclose peer IP addresses. The app does not record the mirror.</p>
+      <p>Enable pairing only while an authorized operator is present. BRSP performs mutual pairing-secret proof over a data-only VDO.Ninja WebRTC peer. Public signaling/STUN/TURN is still used, and a direct route can disclose peer IP addresses.</p>
       <label class="study6-companion-dialog__option"><input type="checkbox" data-force-turn /> Request TURN relay instead of a direct route</label>
+      <label class="study6-companion-dialog__option"><input type="checkbox" data-control /> Allow scoped BRSP remote commands</label>
+      <p>Read-only pairing grants only study status. Mutation scopes must be enabled before pairing starts and cannot change during that pairing session.</p>
       <div class="study6-companion-dialog__actions" data-start-actions></div>
       <p class="study6-companion-dialog__state" data-state role="status">Pairing is off.</p>
       <div class="study6-companion-dialog__pair" data-pair hidden>
@@ -60,7 +62,6 @@ export class CompanionControls {
           <label for="study6-companion-link">Session companion link</label>
           <textarea id="study6-companion-link" data-link readonly rows="5"></textarea>
           <button type="button" data-copy>Copy link</button>
-          <label class="study6-companion-dialog__option"><input type="checkbox" data-control /> Allow scoped BRSP remote commands</label>
           <p>Remote control never permits participant entry, questionnaire answers, consent, immersive-VR admission, data deletion, or record transfer. WebXR remains the experiment authority and may request an APK-local sensor export when the recorder is connected.</p>
         </div>
       </div>
@@ -92,10 +93,10 @@ export class CompanionControls {
   async stop(): Promise<void> {
     this.controlCheckbox.checked = false
     this.options.onControlEnabledChange?.(false)
-    await this.host?.stop()
     this.link.value = ''
     this.qr.removeAttribute('src')
     this.dialog.querySelector<HTMLElement>('[data-pair]')!.hidden = true
+    await this.host?.stop()
   }
 
   destroy(): void {
@@ -138,6 +139,7 @@ export class CompanionControls {
       getStatus: this.options.getStatus,
       handleCommand: this.options.handleCommand,
       frameRate: 15,
+      spectatorMedia: false,
     })
     host.addEventListener('statechange', (event) => {
       const snapshot = (event as CustomEvent<CompanionHostSnapshot>).detail
@@ -147,6 +149,7 @@ export class CompanionControls {
         : 'Companion'
       this.startButton.disabled = snapshot.phase === 'connecting' || snapshot.phase === 'broadcasting'
       this.stopButton.disabled = snapshot.phase === 'idle'
+      this.controlCheckbox.disabled = snapshot.phase !== 'idle'
     })
     this.host = host
     return host

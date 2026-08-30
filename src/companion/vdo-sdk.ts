@@ -31,13 +31,20 @@ export interface VdoOpenChannelOptions {
 export interface VdoNinjaSdk extends EventTarget {
   connect(options?: Record<string, unknown>): Promise<void>
   joinRoom(options: { room: string; password?: string | false }): Promise<void>
+  announce(options: { streamID: string; label: string }): Promise<string>
   publish(
     stream: MediaStream,
     options: { streamID: string; label: string; room?: string; password?: string | false },
   ): Promise<string>
   view(
     streamId: string,
-    options: { audio: boolean; video: boolean; label?: string },
+    options: {
+      audio: boolean
+      video: boolean
+      downloads?: boolean
+      allowresources?: boolean
+      label?: string
+    },
   ): Promise<RTCPeerConnection | null>
   sendData(
     data: unknown,

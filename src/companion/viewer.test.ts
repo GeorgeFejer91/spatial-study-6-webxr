@@ -104,20 +104,29 @@ const network = new FakeNetwork()
 
 class FakeSdk extends EventTarget implements VdoNinjaSdk {
   static readonly VERSION = '1.5.5'
+  static readonly instances: FakeSdk[] = []
 
   readonly peerId: string
   readonly options: Record<string, unknown>
   publishedStreamId: string | undefined
+  disconnected = false
 
   constructor(options: Record<string, unknown> = {}) {
     super()
     this.options = options
     this.peerId = network.register(this)
+    FakeSdk.instances.push(this)
   }
 
   async connect(): Promise<void> {}
 
   async joinRoom(_options: { room: string; password?: string | false }): Promise<void> {}
+
+  async announce(options: { streamID: string; label: string }): Promise<string> {
+    this.publishedStreamId = options.streamID
+    network.publishers.set(options.streamID, this)
+    return options.streamID
+  }
 
   async publish(
     _stream: MediaStream,
@@ -155,7 +164,9 @@ class FakeSdk extends EventTarget implements VdoNinjaSdk {
     return network.open(this, uuid, label, options)
   }
 
-  async disconnect(): Promise<void> {}
+  async disconnect(): Promise<void> {
+    this.disconnected = true
+  }
 }
 
 function makeStatus(revision = 7): CompanionStatus {
@@ -217,6 +228,7 @@ function testCanvas(): HTMLCanvasElement {
 describe('companion viewer BRSP controller', () => {
   afterEach(() => {
     delete window.VDONinjaSDK
+    FakeSdk.instances.length = 0
     network.reset()
   })
 
@@ -356,5 +368,34 @@ describe('companion viewer BRSP controller', () => {
       await viewer?.stop()
       await host.stop()
     }
+  })
+
+  it('fails closed when a silent target misses the authentication deadline', async () => {
+    window.VDONinjaSDK = FakeSdk
+    const descriptor = createPairingDescriptor()
+    const silentTarget = new FakeSdk()
+    await silentTarget.connect()
+    await silentTarget.joinRoom({ room: descriptor.room })
+    await silentTarget.announce({
+      streamID: descriptor.streamId,
+      label: 'silent target',
+    })
+    const viewer = new CompanionViewer(descriptor, { authenticationTimeoutMs: 25 })
+
+    await viewer.connect()
+    const controllerSdk = FakeSdk.instances.at(-1)!
+    await vi.waitFor(() => {
+      expect(viewer.snapshot()).toMatchObject({ phase: 'error', peerConnected: false })
+      expect(controllerSdk.disconnected).toBe(true)
+      expect(Reflect.get(viewer, 'brsp')).toBeNull()
+      expect(Reflect.get(viewer, 'transport')).toBeNull()
+    }, { timeout: 1_000 })
+
+    silentTarget.dispatchEvent(new CustomEvent('dataChannelOpen', {
+      detail: { uuid: controllerSdk.peerId, streamID: descriptor.streamId },
+    }))
+    await new Promise((resolve) => window.setTimeout(resolve, 30))
+    expect(viewer.snapshot()).toMatchObject({ phase: 'error', peerConnected: false })
+    await viewer.stop()
   })
 })

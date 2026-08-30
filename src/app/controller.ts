@@ -828,13 +828,18 @@ export class StudyController {
           message: 'Panel recentered.',
         }
       case 'start_block':
-        return (await this.startBlock())
-          ? this.withPersistedWebXrEffect({
-              accepted: true,
-              code: 'started',
-              message: 'Block started and saved.',
-            })
-          : { accepted: false, code: 'start_failed', message: this.localMessage }
+        {
+          const qualityReady = this.bridgeStartPreflightReady()
+          return (await this.startBlock())
+            ? this.withPersistedWebXrEffect({
+                accepted: true,
+                code: qualityReady ? 'started' : 'started_quality_ineligible',
+                message: qualityReady
+                  ? 'Block started and saved with live ECG preflight ready.'
+                  : 'Block started and saved; missing live H10/writer evidence keeps it ECG quality-ineligible.',
+              })
+            : { accepted: false, code: 'start_failed', message: this.localMessage }
+        }
       case 'pause_media':
         if (await this.enqueue({ type: 'pause_media' })) {
           this.media.pause()
@@ -999,7 +1004,7 @@ export class StudyController {
   }
 
   private bridgeStartPreflightReady(): boolean {
-    if (!this.bridge) return true
+    if (!this.bridge) return false
     return (
       (this.bridgeProjection?.sensorConnected ?? false) &&
       polarProjectionIsReady(this.polar) &&

@@ -33,6 +33,7 @@ const connectionState = element<HTMLElement>('#connection-state')
 const pairingSummary = element<HTMLElement>('#pairing-summary')
 const video = element<HTMLVideoElement>('#spectator-video')
 const videoPlaceholder = element<HTMLElement>('#video-placeholder')
+const monitoringSection = element<HTMLElement>('[data-monitoring]')
 const routeBadge = element<HTMLElement>('#route-badge')
 const commandResult = element<HTMLElement>('#command-result')
 const commandButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-command]'))
@@ -56,7 +57,8 @@ function applyDescriptor(fragment: string): boolean {
   try {
     descriptor = decodePairingDescriptor(fragment)
     pairInput.value = ''
-    pairingSummary.textContent = `BRSP pairing session ${descriptor.streamId.slice(-8).toUpperCase()} is ready to connect${descriptor.forceTurn ? ' through a requested relay route' : ''}. The same link can reconnect until pairing is stopped on the headset.`
+    pairingSummary.textContent = `BRSP pairing session ${descriptor.streamId.slice(-8).toUpperCase()} is ready to connect${descriptor.forceTurn ? ' with TURN requested' : ''}. ${descriptor.spectatorMedia ? 'Optional spectator monitoring is enabled.' : 'This is a data-only session.'} The same link can reconnect until pairing is stopped on the headset.`
+    monitoringSection.hidden = !descriptor.spectatorMedia
     connectionState.textContent = 'Pairing accepted. Connection has not started.'
     connectButton.disabled = false
     return true
@@ -140,7 +142,9 @@ function renderStatus(status: CompanionStatus): void {
   set('recording-durable', status.recordingDurable ? 'Durable' : 'Not confirmed')
   set('writer-health', status.polarWriterHealthy ? 'Healthy' : 'Attention required')
   set('gaps', `${status.polarGapCount} gaps · ${status.polarReconnectCount} reconnects`)
-  set('preflight', status.startPreflightReady ? 'Ready to start' : 'Blocked')
+  set('preflight', status.startPreflightReady
+    ? 'Quality ready'
+    : 'Quality-ineligible; Start and collection remain available')
   set('receipt', status.lastReceiptStage ?? '—')
 
   renderCommandAvailability()

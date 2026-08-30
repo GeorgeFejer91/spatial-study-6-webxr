@@ -46,6 +46,10 @@ export interface CompanionViewerSnapshot {
   commandGateBlocked: boolean
 }
 
+export interface CompanionViewerOptions {
+  authenticationTimeoutMs?: number
+}
+
 function detailEvent<T>(type: string, detail: T): CustomEvent<T> {
   return new CustomEvent(type, { detail })
 }
@@ -71,10 +75,12 @@ export class CompanionViewer extends EventTarget {
   private staleTimer: number | undefined
   private authenticationTimer: number | undefined
   private tearingDown = false
+  private readonly authenticationTimeoutMs: number
 
-  constructor(descriptor: PairingDescriptor) {
+  constructor(descriptor: PairingDescriptor, options: CompanionViewerOptions = {}) {
     super()
     this.descriptor = descriptor
+    this.authenticationTimeoutMs = options.authenticationTimeoutMs ?? 10_000
   }
 
   snapshot(): CompanionViewerSnapshot {
@@ -117,17 +123,17 @@ export class CompanionViewer extends EventTarget {
       await sdk.joinRoom({ room: this.descriptor.room })
       await sdk.view(this.descriptor.streamId, {
         audio: false,
-        video: true,
+        video: this.descriptor.spectatorMedia,
+        downloads: false,
+        allowresources: false,
         label: 'Spatial Study 6 BRSP companion',
       })
       if (this.brsp.phase !== 'ready') {
-        this.message = 'Spectator peer opened; waiting for BRSP mutual authentication…'
+        this.message = 'Data-only peer opened; waiting for BRSP mutual authentication…'
         this.authenticationTimer = window.setTimeout(() => {
           if (this.brsp?.phase === 'ready' || this.tearingDown) return
-          this.phase = 'error'
-          this.message = 'BRSP authentication timed out; confirm the pairing link and try Connect again.'
-          this.emitState()
-        }, 10_000)
+          void this.failAuthenticationTimeout()
+        }, this.authenticationTimeoutMs)
         this.emitState()
       }
     } catch (error) {
@@ -141,11 +147,11 @@ export class CompanionViewer extends EventTarget {
 
   async stop(): Promise<void> {
     this.tearingDown = true
-    await this.disconnect()
     this.phase = 'idle'
     this.message = ''
     this.stateStale = false
     this.emitState()
+    await this.disconnect()
   }
 
   async sendCommand(name: RemoteCommandName): Promise<string> {
@@ -349,6 +355,16 @@ export class CompanionViewer extends EventTarget {
     }, 500)
   }
 
+  private async failAuthenticationTimeout(): Promise<void> {
+    if (this.brsp?.phase === 'ready' || this.tearingDown) return
+    this.tearingDown = true
+    this.phase = 'error'
+    this.message = 'BRSP authentication timed out; transport was closed. Connect again.'
+    this.emitState()
+    await this.disconnect()
+    this.tearingDown = false
+  }
+
   private async disconnect(): Promise<void> {
     if (this.authenticationTimer !== undefined) window.clearTimeout(this.authenticationTimer)
     this.authenticationTimer = undefined
@@ -356,12 +372,15 @@ export class CompanionViewer extends EventTarget {
     this.staleTimer = undefined
     const brsp = this.brsp
     this.brsp = null
-    if (brsp) await brsp.close().catch(() => undefined)
-    this.transport?.stop()
+    const closeBrsp = brsp?.close().catch(() => undefined)
+    const transport = this.transport
     this.transport = null
+    transport?.stop()
     const sdk = this.sdk
     this.sdk = null
-    if (sdk) await Promise.resolve(sdk.disconnect()).catch(() => undefined)
+    const disconnectSdk = sdk
+      ? Promise.resolve(sdk.disconnect()).catch(() => undefined)
+      : undefined
     this.latestRevision = 0
     this.hasFreshStatus = false
     this.awaitingStatusCommandId = null
@@ -369,6 +388,7 @@ export class CompanionViewer extends EventTarget {
     this.outcomeUnknown = false
     for (const pending of this.pendingCommands.values()) window.clearTimeout(pending.timer)
     this.pendingCommands.clear()
+    await Promise.all([closeBrsp, disconnectSdk])
   }
 
   private emitState(): void {

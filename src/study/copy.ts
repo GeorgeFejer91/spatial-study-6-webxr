@@ -32,8 +32,8 @@ const ENGLISH_COPY = {
   "page.participant_id.body":
     "Choose a participant number for this session. Incomplete sessions resume at their first incomplete block; a completed number starts a new timestamped data set.",
   "participant.available": "Available {prefix} ids",
-  "participant.select_unused": "Select unused {prefix} id",
-  "participant.none_available": "No unused {prefix} ids remain",
+  "participant.select_unused": "Select any {prefix} id",
+  "participant.none_available": "All {prefix} ids remain selectable",
   "participant.manual": "Manual participant id",
   "participant.manual_note":
     "Manual ids use the same resume and repeat-data-set behavior.",
@@ -172,8 +172,8 @@ const GERMAN_COPY = {
   "page.participant_id.body":
     "Wählen Sie eine Teilnehmernummer für diese Sitzung. Unvollständige Sitzungen werden beim ersten unvollständigen Block fortgesetzt; eine abgeschlossene Nummer beginnt einen neuen Datensatz mit Zeitstempel.",
   "participant.available": "Verfügbare {prefix}-IDs",
-  "participant.select_unused": "Unbenutzte {prefix}-ID auswählen",
-  "participant.none_available": "Keine unbenutzten {prefix}-IDs mehr verfügbar",
+  "participant.select_unused": "Beliebige {prefix}-ID auswählen",
+  "participant.none_available": "Alle {prefix}-IDs bleiben auswählbar",
   "participant.manual": "Manuelle Teilnehmer-ID",
   "participant.manual_note":
     "Manuelle IDs verwenden dasselbe Verhalten zum Fortsetzen und Erstellen wiederholter Datensätze.",

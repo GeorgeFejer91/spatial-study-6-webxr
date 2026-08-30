@@ -270,7 +270,7 @@ describe('StudyController runtime durability', () => {
     })
   })
 
-  it('waits for the durable start-block revision before acknowledging a remote start', async () => {
+  it('waits for durability and labels an advisory-quality remote start', async () => {
     const fixture = controllerFixture()
     const state = blockReadyState()
     let resolveRevision!: (revision: Pick<SessionRevision, 'revision'>) => void
@@ -296,7 +296,11 @@ describe('StudyController runtime durability', () => {
     expect(settled).toBe(false)
     resolveRevision({ revision: 1 })
 
-    await expect(command).resolves.toMatchObject({ accepted: true, code: 'started' })
+    await expect(command).resolves.toMatchObject({
+      accepted: true,
+      code: 'started_quality_ineligible',
+      message: expect.stringContaining('quality-ineligible'),
+    })
     expect(fixture.internals.state.page).toBe('stimulus')
     expect(fixture.internals.durableRevision).toBe(1)
   })

@@ -18,7 +18,7 @@ import {
   verifyProofEnvelope,
 } from './vendor/browser-remote-sync-protocol/brsp.js'
 
-const pinnedCoreSha256 = '59e3c02ed15042e70b1b11e77bc2c6bd835a3839ee04b1b617dd529137261ef9'
+const pinnedCoreSha256 = '7f28058297388a128e3acfc146248b627921d4629b8f3a575d80d3f6ff0b6911'
 
 describe('vendored BRSP/1 core', () => {
   it('matches the pinned upstream source after line-ending normalization', () => {

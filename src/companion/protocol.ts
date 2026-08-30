@@ -47,6 +47,7 @@ export const PairingDescriptorSchema = z.object({
   streamId: z.string().min(16).max(80).regex(publicTokenPattern),
   key: z.string().length(43).regex(base64UrlPattern),
   forceTurn: z.boolean(),
+  spectatorMedia: z.boolean(),
   relay: RelayDescriptorSchema.optional(),
 }).strict()
 
@@ -194,6 +195,7 @@ function randomToken(byteLength: number): string {
 export function createPairingDescriptor(
   forceTurn = false,
   relay?: RelayDescriptor,
+  spectatorMedia = false,
 ): PairingDescriptor {
   return {
     version: 2,
@@ -202,6 +204,7 @@ export function createPairingDescriptor(
     streamId: `s6xr_${randomToken(18)}`,
     key: toBase64Url(randomBytes(32)),
     forceTurn,
+    spectatorMedia,
     ...(relay ? { relay: RelayDescriptorSchema.parse(relay) } : {}),
   }
 }

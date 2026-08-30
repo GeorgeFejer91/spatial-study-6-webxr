@@ -31,10 +31,9 @@ export class BrspCommandFingerprintWindow {
 }
 
 /**
- * Study 6 hardening around the pinned BRSP/1 reference state machine. The
- * upstream core deduplicates command IDs but does not compare the repeated
- * bytes. A conflicting authenticated replay therefore closes the protocol
- * session instead of receiving an unrelated cached success.
+ * Study 6 defense in depth around the pinned BRSP/1 reference state machine.
+ * Upstream binds cached command IDs to their canonical body; this larger
+ * application window independently rejects conflicting authenticated reuse.
  */
 export class Study6BrspConnection<State extends JsonValue = JsonValue>
   extends BRSPConnection<State> {

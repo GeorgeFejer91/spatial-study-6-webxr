@@ -1,0 +1,11 @@
+{
+  "schema": "spatial.study6.brsp_vendor_provenance.v1",
+  "protocol": "BRSP/1",
+  "upstream": "https://github.com/GeorgeFejer91/browser-remote-sync-protocol",
+  "version": "0.1.0",
+  "commit": "62ff66c6df724847c1e54161feabb470b67b1192",
+  "source_path": "src/brsp.js",
+  "git_blob": "67e1af86eff556d681d3370aef8d515ca95011fc",
+  "sha256_lf": "7f28058297388a128e3acfc146248b627921d4629b8f3a575d80d3f6ff0b6911",
+  "license": "MIT"
+}

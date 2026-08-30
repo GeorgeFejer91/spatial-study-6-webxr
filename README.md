@@ -35,7 +35,7 @@ The intended public endpoints are:
 - a strict sensor-recorder `study6.bridge.v1` client with
   process/page/transport epochs, recording-revision fencing, staged effect
   receipts, and native golden fixtures;
-- a live, bounded Polar status/waveform gate populated only by real APK samples;
+- a live, bounded Polar quality status/waveform populated only by real APK samples;
 - a WebXR-authoritative questionnaire/condition reducer with browser IndexedDB
   recovery and study JSON/CSV exports;
 - privacy-minimized experiment markers sent to the APK so its ECG artifact can
@@ -43,9 +43,9 @@ The intended public endpoints are:
 - explicit APK sensor reconnect, recorder finalize, and sensor-export requests;
 - decoded Web Audio and clock/barrier libraries ready for later hardware timing
   integration; and
-- an explicitly enabled VDO.Ninja companion that mirrors the spectator canvas
-  and issues only WebRTC/DTLS-protected, bounded, revision-checked study
-  commands to WebXR, which forwards only sensor-recorder effects to the APK.
+- an explicitly enabled, data-only VDO.Ninja companion that issues only
+  WebRTC/DTLS-protected, bounded, revision-checked study commands to WebXR,
+  with optional spectator monitoring kept off by default.
 
 The normal timing mode runs each block for five minutes. The clipped mode runs
 ten-second blocks for diagnostics only. Both routes remain test-only and
@@ -60,17 +60,17 @@ npm ci
 npm run dev
 ```
 
-Open the local URL printed by Vite. WebXR owns study state in every mode. By
-default, Start additionally requires a ready Sensor Bridge APK and fails closed
-if real acquisition is unavailable. For isolated questionnaire/UI work only,
-use:
+Open the local URL printed by Vite. WebXR owns study state in every mode. Polar
+H10 and durable-writer readiness are advisory quality evidence: missing evidence
+marks the run quality-ineligible but never disables Start or questionnaire/data
+collection. For isolated questionnaire/UI work, use:
 
 ```text
 ?sensor=disabled-rehearsal
 ```
 
-That explicit route disables the sensor requirement and remains participant
-ineligible. It uses the same origin-scoped browser study store as hybrid mode.
+That explicit route runs without the APK bridge and remains participant-ineligible.
+It uses the same origin-scoped browser study store as hybrid mode.
 A compatible headset browser on an HTTPS origin exposes **Enter VR**.
 WebXR immersive sessions generally require a secure context; a plain HTTP LAN
 URL is useful for desktop checking but may not be admitted by a headset.
@@ -80,7 +80,9 @@ At operator setup:
 1. choose English or German;
 2. choose DHS or SHD;
 3. choose full or clipped timing;
-4. select the next unused local ID or enter an allowed manual ID; and
+4. select any pool ID or enter an allowed manual ID; partially completed data
+   resumes at the first unfinished block, while a completed ID creates another
+   timestamped data set; and
 5. enter only synthetic test demographics unless a separately approved study
    protocol explicitly authorizes real participant data.
 
@@ -97,7 +99,7 @@ URL into `companion.html`. Remote control is a second opt-in and starts off.
 The session link can reconnect one controller at a time until pairing is stopped
 on the headset; starting a new pairing session creates a new descriptor.
 
-The companion uses BRSP/1 over two dedicated WebRTC data channels: reliable
+The companion uses BRSP/1 over two dedicated data-only WebRTC channels: reliable
 ordered commands/receipts and unordered latest-state telemetry. The peers prove
 the random 256-bit session secret mutually, negotiate narrow scopes, and fence
 commands with the authoritative WebXR revision. It can request status, recenter
@@ -107,8 +109,9 @@ recorder finalize/sensor-export request.
 It cannot enter participant data, answer questionnaires, grant consent, enter
 VR, receive an export, or delete records. Today it routes through the active
 WebXR page; the experimental relay is not production-wired, and direct APK
-control during a browser failure is not implemented. The image is the browser's
-spectator canvas, not an exact binocular compositor capture.
+control during a browser failure is not implemented. Read-only pairing grants
+only `study.status.read`; mutation scopes must be enabled before pairing starts.
+Optional spectator monitoring is a separate plane and is off by default.
 
 Only one BRSP controller is admitted per pairing session. Treat the pairing link
 as a short-lived secret and stop pairing before leaving a headset unattended.
@@ -135,8 +138,9 @@ sensor record.
 GitHub Pages still serves the static files and may process ordinary request
 metadata under GitHub's own policies. If an operator explicitly enables the
 companion, the app contacts VDO.Ninja public signaling and STUN/TURN services.
-A direct WebRTC route can disclose peer IP addresses, and the spectator image
-may show participant-entered text. BRSP application frames travel inside
+A direct WebRTC route can disclose peer IP addresses. If optional spectator
+monitoring is explicitly enabled, its image may show participant-entered text.
+BRSP application frames travel inside
 WebRTC's DTLS-protected data channels; the fragment secret is used for mutual
 HMAC proof and VDO.Ninja session protection, not as a separate one-time AES-GCM
 application-message wrapper. This does not remove signaling, endpoint, or

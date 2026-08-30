@@ -264,6 +264,7 @@ export class BRSPConnection<State extends JsonValue = JsonValue> extends EventTa
   acceptedScopes: string[]
   negotiatedCapabilities: string[]
   pendingCommands: Map<string, BRSPPendingCommand>
+  readyAt?: number
   lastStateAt?: number
   lastIntentAt?: number
 

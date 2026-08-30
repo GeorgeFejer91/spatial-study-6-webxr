@@ -67,9 +67,10 @@ bridge.
 - `src/timing/clock-fit.ts` and `src/timing/start-barrier.ts` implement pure,
   deterministic clock-fit and multi-owner barrier state machines. They are not
   production-wired and do not establish physical onset accuracy.
-- `src/companion/*` keeps VDO.Ninja for browser-to-browser spectator media and
+- `src/companion/*` uses VDO.Ninja's data-only announce/view path by default and
   carries BRSP/1 on dedicated reliable-control and unordered latest-state
-  RTCDataChannels. BRSP mutually proves the pairing secret, negotiates scopes,
+  RTCDataChannels. Optional spectator monitoring is separate and off by default.
+  BRSP mutually proves the pairing secret, negotiates scopes,
   revision-fences commands, and returns application-level `applied` receipts.
   Study commands terminate at the WebXR authority; only sensor reconnect,
   recorder marker/finalize, sensor export, and return effects are forwarded to
@@ -178,7 +179,8 @@ tolerance is declared.
 ### BRSP reference intake
 
 - **Reference:** `GeorgeFejer91/browser-remote-sync-protocol`, version `0.1.0`,
-  commit `17b5cdba9d4ac01d6d70bfccf83daf492b5e3d11`.
+  commit `62ff66c6df724847c1e54161feabb470b67b1192`. The release also ships
+  `brsp-provenance.json` with the exact source blob and normalized SHA-256.
 - **Why it matters:** it provides a transport-neutral one-controller/one-target
   state machine for mutual pairing proof, capability/scope negotiation, semantic
   commands, applied receipts, snapshots, and latest-state telemetry.

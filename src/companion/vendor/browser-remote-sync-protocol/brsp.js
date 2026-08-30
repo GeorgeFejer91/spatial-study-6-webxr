@@ -47,7 +47,9 @@ function fail(message) {
 }
 
 function plainObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function exactKeys(value, expected, label) {
@@ -92,6 +94,7 @@ function assertRevision(value, label = "revision") {
 
 function assertTokenArray(value, label, { maxItems = 32 } = {}) {
   if (!Array.isArray(value) || value.length > maxItems) fail(`${label} must be an array of at most ${maxItems} tokens.`);
+  assertJsonValue(value, label);
   const normalized = value.map((item, index) => assertToken(item, `${label}[${index}]`, { max: 64 }));
   if (new Set(normalized).size !== normalized.length) fail(`${label} must not contain duplicates.`);
   return normalized;
@@ -105,8 +108,22 @@ function assertJsonValue(value, label = "value", depth = 0) {
     return value;
   }
   if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) fail(`${label} must be a plain array.`);
     if (value.length > 256) fail(`${label} contains too many array entries.`);
-    value.forEach((item, index) => assertJsonValue(item, `${label}[${index}]`, depth + 1));
+    const allowedKeys = new Set(["length"]);
+    for (let index = 0; index < value.length; index += 1) {
+      const key = String(index);
+      allowedKeys.add(key);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor) fail(`${label} must be a dense array.`);
+      if (!("value" in descriptor)) fail(`${label}[${index}] must be a data property.`);
+      assertJsonValue(descriptor.value, `${label}[${index}]`, depth + 1);
+    }
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string" || !allowedKeys.has(key)) {
+        fail(`${label} must not contain extra array properties.`);
+      }
+    }
     return value;
   }
   if (plainObject(value)) {
@@ -116,7 +133,9 @@ function assertJsonValue(value, label = "value", depth = 0) {
       if (key.length === 0 || key.length > 96 || key === "__proto__" || key === "prototype" || key === "constructor") {
         fail(`${label} contains an unsafe field name.`);
       }
-      assertJsonValue(value[key], `${label}.${key}`, depth + 1);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor)) fail(`${label}.${key} must be a data property.`);
+      assertJsonValue(descriptor.value, `${label}.${key}`, depth + 1);
     }
     return value;
   }
@@ -151,7 +170,13 @@ export function canonicalStringify(value) {
   assertJsonValue(value);
   const visit = (item) => {
     if (item === null || typeof item !== "object") return JSON.stringify(item);
-    if (Array.isArray(item)) return `[${item.map(visit).join(",")}]`;
+    if (Array.isArray(item)) {
+      const entries = [];
+      for (let index = 0; index < item.length; index += 1) {
+        entries.push(visit(Object.getOwnPropertyDescriptor(item, String(index)).value));
+      }
+      return `[${entries.join(",")}]`;
+    }
     return `{${Object.keys(item).sort().map((key) => `${JSON.stringify(key)}:${visit(item[key])}`).join(",")}}`;
   };
   return visit(value);
@@ -245,12 +270,15 @@ export function createHelloEnvelope({
   grantedScopes = [],
 }) {
   assertRole(role);
+  const normalizedCapabilities = assertTokenArray(capabilities, "capabilities");
+  const normalizedRequestedScopes = assertTokenArray(requestedScopes, "requestedScopes");
+  const normalizedGrantedScopes = assertTokenArray(grantedScopes, "grantedScopes");
   const body = {
     role,
     nonce,
-    capabilities: [...new Set(capabilities)].sort(),
-    requestedScopes: [...new Set(requestedScopes)].sort(),
-    grantedScopes: [...new Set(grantedScopes)].sort(),
+    capabilities: normalizedCapabilities.sort(),
+    requestedScopes: normalizedRequestedScopes.sort(),
+    grantedScopes: normalizedGrantedScopes.sort(),
   };
   validateHelloBody(body);
   return makeEnvelope({ type: "hello", sessionId, senderId, senderEpoch, sequence, body });
@@ -470,13 +498,16 @@ export class BRSPConnection extends EventTarget {
     this.negotiatedCapabilities = [];
     this.pendingCommands = new Map();
     this.commandResults = new Map();
+    this.readyAt = undefined;
     this.lastStateAt = undefined;
     this.lastIntentAt = undefined;
     this.controlReceiveChain = Promise.resolve();
     this.commandApplyChain = Promise.resolve();
 
     this.handlers = {
-      peeropen: (event) => { void this.attachPeer(event.detail); },
+      peeropen: (event) => {
+        void this.attachPeer(event.detail).catch((error) => this.protocolError(error));
+      },
       peerclose: (event) => this.handlePeerClose(event.detail),
       controlmessage: (event) => {
         this.controlReceiveChain = this.controlReceiveChain
@@ -651,6 +682,7 @@ export class BRSPConnection extends EventTarget {
     const negotiated = negotiateSession(this.localHello, this.remoteHello);
     this.acceptedScopes = negotiated.acceptedScopes;
     this.negotiatedCapabilities = negotiated.capabilities;
+    this.readyAt = this.now();
     this.phase = "ready";
     this.emitPhase("Mutual proof verified; application synchronization is ready.");
     this.dispatchEvent(detailEvent("ready", this.snapshot()));
@@ -700,7 +732,13 @@ export class BRSPConnection extends EventTarget {
     if (!this.acceptedScopes.includes(command.scope)) fail("Command uses a scope that was not negotiated.");
     const cached = this.commandResults.get(command.commandId);
     if (cached) {
-      this.sendControlEnvelope(cached);
+      if (cached.request !== canonicalStringify(command)) fail("A commandId was reused with a different command body.");
+      this.sendControlEnvelope(createAppliedEnvelope({
+        hello: this.localHello,
+        sequence: this.nextControlSequence(),
+        commandId: command.commandId,
+        ...cached.outcome,
+      }));
       return;
     }
 
@@ -724,7 +762,10 @@ export class BRSPConnection extends EventTarget {
       commandId: command.commandId,
       ...normalized,
     });
-    this.commandResults.set(command.commandId, applied);
+    this.commandResults.set(command.commandId, {
+      request: canonicalStringify(command),
+      outcome: normalized,
+    });
     if (this.commandResults.size > 128) this.commandResults.delete(this.commandResults.keys().next().value);
     this.sendControlEnvelope(applied);
     this.dispatchEvent(detailEvent("command", { command, outcome: normalized }));
@@ -872,8 +913,9 @@ export class BRSPConnection extends EventTarget {
   }
 
   isStateStale(at = this.now(), thresholdMs = BRSP_STALE_MS) {
-    return this.role === "controller" && this.phase === "ready" && Number.isFinite(this.lastStateAt)
-      && at - this.lastStateAt >= thresholdMs;
+    const freshnessBaseline = Number.isFinite(this.lastStateAt) ? this.lastStateAt : this.readyAt;
+    return this.role === "controller" && (this.phase === "ready" || this.phase === "disconnected")
+      && Number.isFinite(freshnessBaseline) && at - freshnessBaseline >= thresholdMs;
   }
 
   isIntentStale(at = this.now(), thresholdMs = 500) {

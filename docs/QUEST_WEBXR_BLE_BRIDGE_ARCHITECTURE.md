@@ -86,7 +86,7 @@ path. The first production topology should be:
 ```text
 phone/PC companion
         |
-        | encrypted VDO.Ninja WebRTC data + spectator media
+        | encrypted VDO.Ninja data-only WebRTC (optional spectator plane off)
         v
 WebXR experiment coordinator
         |
@@ -223,7 +223,8 @@ The current WebXR repository contains the implemented browser companion base:
   is the pinned MIT BRSP/1 transport-neutral core.
 - [`src/companion/brsp-vdo-peer-transport.ts`](../src/companion/brsp-vdo-peer-transport.ts)
   adds reliable ordered control and unordered zero-retry latest-state channels to
-  the same WebRTC peer that carries spectator media.
+  a data-only WebRTC peer. Optional spectator monitoring is independent and off
+  by default.
 - [`src/companion/host.ts`](../src/companion/host.ts) is the BRSP target. It proves
   the pairing secret, grants narrow scopes, enforces the WebXR revision, and sends
   WebXR-authoritative status plus APK-derived sensor-recorder telemetry.

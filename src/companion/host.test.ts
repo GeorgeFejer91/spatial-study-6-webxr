@@ -58,7 +58,7 @@ class LinkedDataChannel extends EventTarget {
 
 interface PublishedStream {
   sdk: FakeVdoSdk
-  stream: MediaStream
+  stream: MediaStream | null
   streamId: string
 }
 
@@ -74,7 +74,7 @@ class FakeVdoNetwork {
     return id
   }
 
-  publish(sdk: FakeVdoSdk, stream: MediaStream, streamId: string): void {
+  publish(sdk: FakeVdoSdk, stream: MediaStream | null, streamId: string): void {
     this.streams.set(streamId, { sdk, stream, streamId })
   }
 
@@ -134,6 +134,7 @@ class FakeVdoSdk extends EventTarget implements VdoNinjaSdk {
   readonly peerId: string
   readonly options: Record<string, unknown>
   publishedStreamId: string | undefined
+  disconnectPromise: Promise<void> = Promise.resolve()
 
   constructor(options: Record<string, unknown> = {}) {
     super()
@@ -145,6 +146,12 @@ class FakeVdoSdk extends EventTarget implements VdoNinjaSdk {
   async connect(): Promise<void> {}
 
   async joinRoom(_options: { room: string; password?: string | false }): Promise<void> {}
+
+  async announce(options: { streamID: string; label: string }): Promise<string> {
+    this.publishedStreamId = options.streamID
+    network.publish(this, null, options.streamID)
+    return options.streamID
+  }
 
   async publish(
     stream: MediaStream,
@@ -182,7 +189,9 @@ class FakeVdoSdk extends EventTarget implements VdoNinjaSdk {
     return network.openChannel(this, uuid, label, options)
   }
 
-  async disconnect(): Promise<void> {}
+  async disconnect(): Promise<void> {
+    await this.disconnectPromise
+  }
 }
 
 function makeStatus(revision: number, recordingRevision = 12): CompanionStatus {
@@ -230,15 +239,20 @@ function makeStatus(revision: number, recordingRevision = 12): CompanionStatus {
   }
 }
 
-function canvasWithTrack(): { canvas: HTMLCanvasElement; track: { stop: ReturnType<typeof vi.fn> } } {
+function canvasWithTrack(): {
+  canvas: HTMLCanvasElement
+  track: { stop: ReturnType<typeof vi.fn> }
+  capture: ReturnType<typeof vi.fn>
+} {
   const track = { stop: vi.fn() }
   const stream = {
     getVideoTracks: () => [track],
     getTracks: () => [track],
   } as unknown as MediaStream
   const canvas = document.createElement('canvas')
-  Object.defineProperty(canvas, 'captureStream', { value: () => stream })
-  return { canvas, track }
+  const capture = vi.fn(() => stream)
+  Object.defineProperty(canvas, 'captureStream', { value: capture })
+  return { canvas, track, capture }
 }
 
 describe('companion host BRSP target', () => {
@@ -271,7 +285,11 @@ describe('companion host BRSP target', () => {
       },
     )
     const { canvas, track } = canvasWithTrack()
-    const host = new CompanionHost({ getStatus: () => currentStatus, handleCommand })
+    const host = new CompanionHost({
+      getStatus: () => currentStatus,
+      handleCommand,
+      spectatorMedia: true,
+    })
     let viewer: CompanionViewer | undefined
 
     try {
@@ -407,7 +425,7 @@ describe('companion host BRSP target', () => {
     const host = new CompanionHost({
       getStatus: () => currentStatus,
       handleCommand: vi.fn(),
-      authenticationTimeoutMs: 25,
+      authenticationTimeoutMs: 100,
     })
     let controller: CompanionViewer | undefined
 
@@ -447,5 +465,59 @@ describe('companion host BRSP target', () => {
       await controller?.stop()
       await host.stop()
     }
+  })
+
+  it('uses a data-only peer by default and grants only status while control is off', async () => {
+    window.VDONinjaSDK = FakeVdoSdk
+    const status = { ...makeStatus(13), remoteControlEnabled: false }
+    const { canvas, capture } = canvasWithTrack()
+    const host = new CompanionHost({
+      getStatus: () => status,
+      handleCommand: vi.fn(),
+    })
+    let viewer: CompanionViewer | undefined
+
+    try {
+      const started = await host.start(canvas)
+      const descriptor = decodePairingDescriptor(new URL(started.pairingUrl ?? '').hash)
+      expect(descriptor.spectatorMedia).toBe(false)
+      expect(capture).not.toHaveBeenCalled()
+      viewer = new CompanionViewer(descriptor)
+      await viewer.connect()
+      await vi.waitFor(() => {
+        expect(host.snapshot().acceptedScopes).toEqual(['study.status.read'])
+        expect(viewer?.snapshot().acceptedScopes).toEqual(['study.status.read'])
+      }, { timeout: 3_000 })
+    } finally {
+      await viewer?.stop()
+      await host.stop()
+    }
+  })
+
+  it('invalidates the pairing secret and stops optional capture before signaling disconnect resolves', async () => {
+    window.VDONinjaSDK = FakeVdoSdk
+    const { canvas, track } = canvasWithTrack()
+    const host = new CompanionHost({
+      getStatus: () => makeStatus(15),
+      handleCommand: vi.fn(),
+      spectatorMedia: true,
+    })
+    await host.start(canvas)
+
+    let releaseDisconnect: () => void = () => {}
+    FakeVdoSdk.instances[0]!.disconnectPromise = new Promise<void>((resolve) => {
+      releaseDisconnect = resolve
+    })
+    let settled = false
+    const stopping = host.stop().then(() => {
+      settled = true
+    })
+
+    expect(host.snapshot()).toMatchObject({ phase: 'idle', pairingUrl: null })
+    expect(track.stop).toHaveBeenCalledTimes(1)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    releaseDisconnect()
+    await stopping
   })
 })

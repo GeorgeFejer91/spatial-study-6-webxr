@@ -16,9 +16,8 @@
         <p class="eyebrow">Operator companion · test-only</p>
         <h1 id="page-title">Spatial Study 6</h1>
         <p class="lede">
-          A volatile WebRTC peer can show the headset spectator view. BRSP/1 mutually authenticates
-          the browser peers, scopes commands, and synchronizes authoritative WebXR status. This page
-          never records the video.
+          A volatile data-only WebRTC peer carries BRSP/1 authoritative status and optional scoped
+          commands. Spectator video is a separate monitoring plane and is off by default.
         </p>
       </header>
 
@@ -41,15 +40,15 @@
           <summary>Privacy and network disclosure</summary>
           <p>
             Pairing contacts VDO.Ninja’s public signaling and STUN/TURN infrastructure. A direct
-            WebRTC route can disclose peer IP addresses. The live spectator image may contain text
-            the participant entered. The link can reconnect one controller at a time while this
+            WebRTC route can disclose peer IP addresses. If optional monitoring was explicitly
+            enabled, its spectator image may contain participant-entered text. The link can reconnect one controller at a time while this
             headset pairing session remains enabled. Use only with an authorized operator and stop
             pairing before leaving the headset unattended.
           </p>
         </details>
       </section>
 
-      <section class="mirror-card" aria-labelledby="mirror-title">
+      <section class="mirror-card" aria-labelledby="mirror-title" data-monitoring hidden>
         <div class="section-heading">
           <div>
             <p class="eyebrow">Live spectator mirror</p>
@@ -62,7 +61,7 @@
           <p id="video-placeholder">The headset image appears after the peer video track connects.</p>
         </div>
         <p class="fine-print">
-          This is the WebXR spectator canvas, not a recording or a pixel-exact capture of both
+          Optional monitoring is the WebXR spectator canvas, not a recording or a pixel-exact capture of both
           headset eye buffers.
         </p>
       </section>

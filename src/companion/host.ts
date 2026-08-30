@@ -45,6 +45,8 @@ export interface CompanionHostOptions {
   frameRate?: number
   /** Deadline for a transport peer to complete BRSP mutual authentication. */
   authenticationTimeoutMs?: number
+  /** Optional monitoring plane. BRSP remains data-only and independent. */
+  spectatorMedia?: boolean
 }
 
 export interface CompanionHostSnapshot {
@@ -82,6 +84,7 @@ export class CompanionHost extends EventTarget {
   private statusTimer: number | undefined
   private authenticationTimer: number | undefined
   private lastProcessedCommandId: string | null = null
+  private lifecycleGeneration = 0
 
   constructor(options: CompanionHostOptions) {
     super()
@@ -101,16 +104,20 @@ export class CompanionHost extends EventTarget {
   }
 
   async start(canvas: HTMLCanvasElement, forceTurn = false): Promise<CompanionHostSnapshot> {
-    if (!('captureStream' in canvas) || typeof canvas.captureStream !== 'function') {
+    const spectatorMedia = this.options.spectatorMedia === true
+    if (spectatorMedia && (!('captureStream' in canvas) || typeof canvas.captureStream !== 'function')) {
       throw new Error('This browser cannot capture the WebXR spectator canvas.')
     }
     await this.stop()
+    const generation = ++this.lifecycleGeneration
     this.phase = 'connecting'
-    this.message = 'Connecting spectator media and BRSP control to VDO.Ninja signaling…'
+    this.message = spectatorMedia
+      ? 'Connecting optional spectator media and BRSP control to VDO.Ninja signaling…'
+      : 'Connecting data-only BRSP control to VDO.Ninja signaling…'
     this.emitState()
     try {
       this.lastProcessedCommandId = null
-      this.descriptor = createPairingDescriptor(forceTurn)
+      this.descriptor = createPairingDescriptor(forceTurn, undefined, spectatorMedia)
       const Constructor = await loadVdoNinjaSdk()
       const sdk = createVdoSdk(Constructor, forceTurn, this.descriptor.key)
       this.sdk = sdk
@@ -123,22 +130,33 @@ export class CompanionHost extends EventTarget {
       transport.start()
       this.brsp = this.createTargetConnection(transport, this.descriptor)
 
-      this.captureStream = canvas.captureStream(this.options.frameRate ?? 15)
-      if (this.captureStream.getVideoTracks().length !== 1) {
-        throw new Error('The spectator canvas did not produce a video track.')
-      }
       await sdk.connect()
+      if (generation !== this.lifecycleGeneration) return this.snapshot()
       await sdk.joinRoom({ room: this.descriptor.room })
-      await sdk.publish(this.captureStream, {
-        streamID: this.descriptor.streamId,
-        label: 'Spatial Study 6 spectator + BRSP target',
-      })
+      if (generation !== this.lifecycleGeneration) return this.snapshot()
+      if (spectatorMedia) {
+        this.captureStream = canvas.captureStream(this.options.frameRate ?? 15)
+        if (this.captureStream.getVideoTracks().length !== 1) {
+          throw new Error('The spectator canvas did not produce a video track.')
+        }
+        await sdk.publish(this.captureStream, {
+          streamID: this.descriptor.streamId,
+          label: 'Spatial Study 6 optional spectator + BRSP target',
+        })
+      } else {
+        await sdk.announce({
+          streamID: this.descriptor.streamId,
+          label: 'Spatial Study 6 data-only BRSP target',
+        })
+      }
+      if (generation !== this.lifecycleGeneration) return this.snapshot()
       this.phase = 'broadcasting'
       this.message = 'Pairing is ready; waiting for one authenticated BRSP controller.'
       this.statusTimer = window.setInterval(() => this.broadcastStatus(), 1_000)
       this.emitState()
       return this.snapshot()
     } catch (error) {
+      if (generation !== this.lifecycleGeneration) return this.snapshot()
       const message = error instanceof Error ? error.message : String(error)
       await this.disconnect()
       this.descriptor = null
@@ -150,11 +168,12 @@ export class CompanionHost extends EventTarget {
   }
 
   async stop(): Promise<void> {
-    await this.disconnect()
+    this.lifecycleGeneration += 1
     this.descriptor = null
     this.phase = 'idle'
     this.message = ''
     this.emitState()
+    await this.disconnect()
   }
 
   broadcastStatus(): void {
@@ -172,9 +191,11 @@ export class CompanionHost extends EventTarget {
       role: 'target',
       sessionId: descriptor.room,
       sharedSecret: descriptor.key,
-      peerId: descriptor.streamId,
+      peerId: `target_${crypto.randomUUID()}`,
       capabilities: [...STUDY6_BRSP_CAPABILITIES],
-      grantedScopes: [...STUDY6_BRSP_SCOPES],
+      grantedScopes: this.options.getStatus().remoteControlEnabled
+        ? [...STUDY6_BRSP_SCOPES]
+        : ['study.status.read'],
       getState: () => this.authoritativeStatus() as unknown as JsonValue,
       applyCommand: (command) => this.applyBrspCommand(command),
     })
@@ -331,14 +352,19 @@ export class CompanionHost extends EventTarget {
     this.statusTimer = undefined
     const brsp = this.brsp
     this.brsp = null
-    if (brsp) await brsp.close().catch(() => undefined)
-    this.transport?.stop()
+    const closeBrsp = brsp?.close().catch(() => undefined)
+    const transport = this.transport
     this.transport = null
+    transport?.stop()
+    const captureStream = this.captureStream
+    this.captureStream = null
+    for (const track of captureStream?.getTracks() ?? []) track.stop()
     const sdk = this.sdk
     this.sdk = null
-    if (sdk) await Promise.resolve(sdk.disconnect()).catch(() => undefined)
-    for (const track of this.captureStream?.getTracks() ?? []) track.stop()
-    this.captureStream = null
+    const disconnectSdk = sdk
+      ? Promise.resolve(sdk.disconnect()).catch(() => undefined)
+      : undefined
+    await Promise.all([closeBrsp, disconnectSdk])
   }
 
   private startAuthenticationTimer(connection: Study6BrspConnection<JsonValue>): void {
