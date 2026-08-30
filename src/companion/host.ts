@@ -10,9 +10,11 @@ import { Study6BrspVdoPeerTransport } from './brsp-vdo-peer-transport.ts'
 import {
   createPairingDescriptor,
   encodePairingDescriptor,
+  PairingDescriptorSchema,
+  RemoteMutationCommandRequestSchema,
   type CompanionStatus,
   type PairingDescriptor,
-  type RemoteCommandName,
+  type RemoteMutationCommandRequest,
 } from './protocol.ts'
 import {
   type BRSPCommandContext,
@@ -38,7 +40,7 @@ export interface CommandDecision {
 export interface CompanionHostOptions {
   getStatus: () => CompanionStatus
   handleCommand: (
-    name: Exclude<RemoteCommandName, 'request_status'>,
+    request: RemoteMutationCommandRequest,
     expectedRevision: number,
   ) => CommandDecision | Promise<CommandDecision>
   companionPageUrl?: URL
@@ -103,8 +105,18 @@ export class CompanionHost extends EventTarget {
     }
   }
 
-  async start(canvas: HTMLCanvasElement, forceTurn = false): Promise<CompanionHostSnapshot> {
-    const spectatorMedia = this.options.spectatorMedia === true
+  async start(
+    canvas: HTMLCanvasElement,
+    forceTurn = false,
+    trustedDescriptor?: PairingDescriptor,
+  ): Promise<CompanionHostSnapshot> {
+    const descriptor = trustedDescriptor
+      ? PairingDescriptorSchema.parse(trustedDescriptor)
+      : createPairingDescriptor(forceTurn, undefined, this.options.spectatorMedia === true)
+    const spectatorMedia = descriptor.spectatorMedia
+    if (spectatorMedia !== (this.options.spectatorMedia === true)) {
+      throw new Error('The trusted pairing descriptor does not match the configured spectator mode.')
+    }
     if (spectatorMedia && (!('captureStream' in canvas) || typeof canvas.captureStream !== 'function')) {
       throw new Error('This browser cannot capture the WebXR spectator canvas.')
     }
@@ -117,9 +129,13 @@ export class CompanionHost extends EventTarget {
     this.emitState()
     try {
       this.lastProcessedCommandId = null
-      this.descriptor = createPairingDescriptor(forceTurn, undefined, spectatorMedia)
+      this.descriptor = descriptor
       const Constructor = await loadVdoNinjaSdk()
-      const sdk = createVdoSdk(Constructor, forceTurn, this.descriptor.key)
+      // Stop/Rotate can run while the lazily loaded SDK script is pending. Do
+      // not create a signaling client after that lifecycle generation was
+      // revoked; stop() could not have seen or disconnected such a client.
+      if (generation !== this.lifecycleGeneration) return this.snapshot()
+      const sdk = createVdoSdk(Constructor, descriptor.forceTurn, descriptor.key)
       this.sdk = sdk
       const transport = new Study6BrspVdoPeerTransport({
         sdk,
@@ -200,6 +216,9 @@ export class CompanionHost extends EventTarget {
       applyCommand: (command) => this.applyBrspCommand(command),
     })
     connection.addEventListener('phasechange', (event) => {
+      // A retired BRSP epoch can still deliver a queued terminal event after
+      // rearm. It must not overwrite the fresh connection's status or timers.
+      if (this.brsp !== connection) return
       const detail = event.detail
       if (detail.phase === 'ready') {
         this.clearAuthenticationTimer()
@@ -267,8 +286,8 @@ export class CompanionHost extends EventTarget {
 
   private async applyBrspCommand(command: BRSPCommandContext): Promise<BRSPCommandOutcome> {
     const current = this.authoritativeStatus()
-    const name = brspToRemoteCommand(command.scope, command.action, command.args)
-    if (!name) {
+    const request = brspToRemoteCommand(command.scope, command.action, command.args)
+    if (!request) {
       this.lastProcessedCommandId = command.commandId
       return {
         ok: false,
@@ -280,7 +299,7 @@ export class CompanionHost extends EventTarget {
         error: 'unsupported_command',
       }
     }
-    if (name !== 'request_status' && command.expectedRevision === null) {
+    if (request.name !== 'request_status' && command.expectedRevision === null) {
       this.lastProcessedCommandId = command.commandId
       return {
         ok: false,
@@ -292,7 +311,7 @@ export class CompanionHost extends EventTarget {
         error: 'expected_revision_required',
       }
     }
-    if (name !== 'request_status' && command.expectedRevision !== current.revision) {
+    if (request.name !== 'request_status' && command.expectedRevision !== current.revision) {
       this.lastProcessedCommandId = command.commandId
       return {
         ok: false,
@@ -306,7 +325,7 @@ export class CompanionHost extends EventTarget {
     }
 
     let decision: CommandDecision
-    if (name === 'request_status') {
+    if (request.name === 'request_status') {
       decision = {
         accepted: true,
         code: 'status_requested',
@@ -314,7 +333,10 @@ export class CompanionHost extends EventTarget {
       }
     } else {
       try {
-        decision = await this.options.handleCommand(name, command.expectedRevision as number)
+        decision = await this.options.handleCommand(
+          RemoteMutationCommandRequestSchema.parse(request),
+          command.expectedRevision as number,
+        )
       } catch {
         decision = {
           accepted: false,

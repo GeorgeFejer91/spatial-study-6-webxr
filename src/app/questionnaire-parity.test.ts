@@ -108,6 +108,7 @@ function render(
   page: ExperimentPage,
   mutate?: (state: ExperimentState) => void,
   polar?: PolarStatusProjection,
+  recordingSessionReady = false,
 ) {
   const panel = new SpatialStudyPanel()
   panels.push(panel)
@@ -118,6 +119,7 @@ function render(
     localMessage: '',
     storageHealthy: true,
     polar,
+    recordingSessionReady,
   })
   return panel
 }
@@ -506,7 +508,12 @@ describe('questionnaire page composition and gating', () => {
       reconnectCount: 0,
       gapCount: 0,
     }
-    const panel = render('demographics', undefined, polar)
+    const pendingPanel = render('demographics', undefined, polar)
+    expect(
+      property(named(pendingPanel.body, 'study6-demographics-polar-status'), 'backgroundColor'),
+    ).toBe(STUDY_UI_COLORS.warningSoft)
+
+    const panel = render('demographics', undefined, polar, true)
     const status = named(panel.body, 'study6-demographics-polar-status')
     expect(property(status, 'backgroundColor')).toBe(STUDY_UI_COLORS.successSoft)
     expect(named(panel.body, 'study6-polar-waveform-real').children).toHaveLength(8)
@@ -598,7 +605,7 @@ describe('questionnaire page composition and gating', () => {
     ).toBe(STUDY_UI_COLORS.success)
   })
 
-  it('keeps the block start control enabled when APK ECG preflight is not ready', () => {
+  it('keeps the block start control disabled when APK ECG preflight is not ready', () => {
     const panel = new SpatialStudyPanel()
     panels.push(panel)
     const state = questionnaireState('block_ready')
@@ -617,11 +624,19 @@ describe('questionnaire page composition and gating', () => {
         questionnaire: null,
       },
     ]
-    new StudyPanelRenderer(panel, actions()).render(state, {
+    const renderer = new StudyPanelRenderer(panel, actions())
+    renderer.render(state, {
       participantProgress: [],
       localMessage: '',
       storageHealthy: true,
       startPreflightReady: false,
+    })
+    expect(property(named(panel.body, 'study6-block-start'), 'pointerEvents')).toBe('none')
+    renderer.render(state, {
+      participantProgress: [],
+      localMessage: '',
+      storageHealthy: true,
+      startPreflightReady: true,
     })
     expect(property(named(panel.body, 'study6-block-start'), 'pointerEvents')).toBe('auto')
   })

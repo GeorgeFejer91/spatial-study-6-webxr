@@ -1,7 +1,7 @@
 # Quest WebXR, BLE, and remote-control architecture
 
-Status: host-implemented authority split plus proposed production qualification  
-Date: 2026-08-30
+Status: host-implemented authority split plus public browser-beacon prototype and proposed production qualification
+Date: 2026-08-31
 
 ## Decision
 
@@ -23,27 +23,34 @@ Use this runtime split:
   recording epochs/revisions, durable marker/sample storage, recorder
   finalization/sensor export, and the monotonic clock proposed for cross-runtime
   start barriers. It never decides a questionnaire or condition transition.
-- **Phone/desktop controller** submits bounded experiment intents and displays
+- **Phone/desktop controller** discovers the open WebXR beacon on a bare
+  `companion.html` visit, submits bounded experiment intents, and displays
   aggregate status. It does not independently fan one start command out to two
   runtimes.
-- **VDO.Ninja** remains the browser-to-browser spectator, remote-control, and
-  low-rate telemetry path already used by this project.
+- **VDO.Ninja** carries the passwordless public browser discovery room and the
+  separate data-only BRSP remote-control/telemetry connection. Optional spectator
+  media is another plane and remains off by default.
 - **Bridge transport adapters** carry the same application protocol between WebXR
   and the APK. Qualify an authenticated loopback WebSocket first; add a direct
   VDO/WebRTC APK peer as an optional adapter; add a neutral secure WSS relay when
   the APK must remain independently reachable from outside the headset.
 
-The implemented command path is companion → WebXR → sensor bridge. A Rust relay
-scaffold exists, but it is not production-wired, and there is no independently
-reachable native VDO peer. The future-`T0` audio/ECG barrier is also not
-production-wired. Physical Quest + H10 validation remains pending.
+The implemented command path is companion browser → WebXR browser → sensor
+bridge. The first browser-to-browser hop starts automatically, derives one public
+BRSP/VDO descriptor from an opaque advertised handle, and admits one controller
+at a time. The APK has no role in beacon announcement, discovery, or BRSP. A Rust
+relay scaffold exists, but it is not production-wired, and there is no
+independently reachable native VDO peer. The future-`T0` audio/ECG barrier is also
+not production-wired. Physical Quest + H10 validation remains pending.
 
 The participant first opens the APK, connects the H10, sees a live ECG readiness
-screen, starts the foreground service and recording, and then presses **Launch
-experiment**. The APK opens the exact pinned HTTPS deployment in Meta Quest
-Browser. The current WebXR Start control remains gated until actual ECG
-samples—not just a GATT connection—are arriving and the bridge reports a healthy
-open writer. The future-`T0` barrier must add a measured clock-fit gate before any
+screen, starts the foreground service, and then presses **Launch experiment**.
+The APK opens the exact pinned HTTPS deployment in Meta Quest Browser. After
+WebXR durably allocates or recovers the participant session, bridge v2 opens the
+session-owned recording and WebXR waits for its observed ownership snapshot.
+The current WebXR Start control remains gated until actual ECG samples—not just
+a GATT connection—are arriving and the bridge reports that matching healthy open
+writer. The future-`T0` barrier must add a measured clock-fit gate before any
 synchronized-timing claim.
 
 This preserves the browser deployment model while solving Bluetooth in the one
@@ -102,6 +109,36 @@ independent sensor rescue/status reachability, but it cannot become a second
 questionnaire or condition authority. Only one sensor-command transport epoch is
 active at a time; duplicate messages on a failover path are deduplicated by
 command ID and recording epoch.
+
+### How does the public browser companion connect?
+
+The current phase deliberately optimizes for no headset interaction:
+
+1. WebXR loads or creates a persisted random target seed.
+2. It hashes the seed's nonsecret stream hint into a 24-hex-character public
+   handle and announces only `s6_beacon_<handle>` in a fixed passwordless VDO
+   room.
+3. A phone/PC that opens bare `companion.html` joins that room, orders the online
+   handles lexically, and selects the first handle deterministically.
+4. Both browsers apply the same domain-separated SHA-256 derivations to that
+   public handle to obtain the BRSP key and data-only VDO room/stream names.
+5. The companion connects, performs BRSP transcript proof, requests all defined
+   Study 6 operator scopes, receives privacy-minimized state, and retries with a
+   bounded backoff when the target is temporarily unavailable.
+
+This is intentionally an open-control prototype. The derivation has no hidden
+input, so possession proof establishes a consistent protocol session but not the
+identity or authorization of the phone, computer, or operator. Any visitor who
+can observe the beacon can derive the same descriptor. WebXR admits only one
+controller at a time and continues to enforce typed actions, schemas, revisions,
+the reducer, and experiment/sensor gates. A direct QR/link plus manual descriptor
+input remain available for discovery failure; a private link is not required for
+normal operation. **Pause automatic pairing** and **Rotate public identity** are
+local lifecycle controls, not an identity system.
+
+The APK is absent from this exchange. It continues to communicate only with the
+WebXR coordinator through `study6.bridge.v2`; a remote sensor request is admitted
+and reduced by WebXR before WebXR forwards the corresponding bounded effect.
 
 ### Can audio and ECG start at exactly the same time?
 
@@ -216,19 +253,28 @@ Primary references:
 The current WebXR repository contains the implemented browser companion base:
 
 - [`src/companion/protocol.ts`](../src/companion/protocol.ts) defines strict
-  privacy-minimized status, random 256-bit pairing material, and the versioned
-  pairing descriptor. Its older AES-GCM envelope remains only for the unwired
-  experimental WSS relay.
+  privacy-minimized status, random seed/manual-pairing material, and the
+  versioned pairing descriptor. Its older AES-GCM envelope remains only for the
+  unwired experimental WSS relay.
+- [`src/companion/public-beacon.ts`](../src/companion/public-beacon.ts) implements
+  bounded passwordless discovery and the deterministic public BRSP/VDO descriptor
+  derivation. The discovery listing carries only an opaque handle and locally
+  derived generic label; it does not carry scopes, status, participant/session
+  state, questionnaire data, ECG, or APK information.
 - [`src/companion/vendor/browser-remote-sync-protocol/brsp.js`](../src/companion/vendor/browser-remote-sync-protocol/brsp.js)
   is the pinned MIT BRSP/1 transport-neutral core.
 - [`src/companion/brsp-vdo-peer-transport.ts`](../src/companion/brsp-vdo-peer-transport.ts)
   adds reliable ordered control and unordered zero-retry latest-state channels to
   a data-only WebRTC peer. Optional spectator monitoring is independent and off
   by default.
-- [`src/companion/host.ts`](../src/companion/host.ts) is the BRSP target. It proves
-  the pairing secret, grants narrow scopes, enforces the WebXR revision, and sends
-  WebXR-authoritative status plus APK-derived sensor-recorder telemetry.
-- [`src/companion/viewer.ts`](../src/companion/viewer.ts) is the 2D remote peer.
+- [`src/companion/host.ts`](../src/companion/host.ts) is the one-controller BRSP
+  target. It proves descriptor possession, grants the defined bounded scopes,
+  enforces the WebXR revision, and sends WebXR-authoritative status plus
+  APK-derived sensor-recorder telemetry.
+- [`src/companion/viewer.ts`](../src/companion/viewer.ts) is the 2D remote peer;
+  [`src/companion/main.ts`](../src/companion/main.ts) starts public discovery and
+  connection automatically from bare `companion.html`, while retaining fragment,
+  saved-descriptor, and manual-input fallbacks.
 - [`src/companion/vdo-sdk.ts`](../src/companion/vdo-sdk.ts) pins and integrity-checks
   VDO.Ninja SDK 1.5.5.
 - [`src/study/remote.ts`](../src/study/remote.ts) has a strict domain allowlist,
@@ -273,8 +319,13 @@ The Affect Tracker/Flubber implementations provide a second useful split:
 - latest-state, bounded, drop-tolerant binary updates for live motion/preview;
 - sequence, RTT, gap, stale-source, and recovery diagnostics.
 
-Those data-lane patterns are reusable. Public rooms, unauthenticated discovery,
-and the old coordinate packet are not suitable for experiment authority or ECG.
+Those data-lane patterns are reusable. The current prototype intentionally adopts
+the public-room listing pattern for zero-click availability and derives an open
+bounded-control descriptor from the listed handle. It never puts experiment
+state, answers, or raw ECG in the public listing, and the listing never becomes
+experiment authority: WebXR still validates and reduces every typed command. The
+open descriptor is not suitable as production identity or access control; the
+old coordinate packet remains outside this protocol.
 
 ## Target components
 
@@ -363,13 +414,13 @@ legally starts the foreground service before Meta Browser takes focus.
 | --- | --- | --- |
 | Study page, block order, questionnaire route, experiment revision | WebXR study controller | Controller submits intents; APK observes block IDs |
 | Browser recovery, questionnaire/condition record, study JSON/CSV export | WebXR IndexedDB/export layer | APK receives no answers or participant demographics |
-| Remote-control lease and safe study command admission | WebXR coordinator | Wearer grants/revokes; controller holds a short lease |
+| Remote command admission | WebXR coordinator | Public prototype auto-enables all defined scopes and admits one controller; typed reducer and readiness gates remain authoritative |
 | Bluetooth connection and H10 stream epoch | APK sensor provider | WebXR/controller request desired state and observe receipts |
 | Raw ECG bytes and durable file | APK recorder | WebXR/controller receive health/preview only |
 | Sensor readiness/QC revision | APK sensor provider | WebXR gates starts against it |
 | Stimulus/media state | WebXR media provider | APK receives scheduled barrier and outcome |
 | Trial `T0` reference and ECG marker | Planned APK monotonic barrier service | WebXR maps/schedules against it; not production-wired |
-| Companion pairing/control key | WebXR local onboarding coordinator | Wearer explicitly enables/revokes it |
+| Public companion handle and derived descriptor | WebXR seed plus deterministic browser derivation | Public by design in this phase; Pause/Rotate controls lifecycle but no operator identity or access policy exists |
 | APK launch/bootstrap token | APK bridge admission | Single-use capability for the allowlisted WebXR origin |
 | VDO signaling and relay | Transport only | Never decides or proves experiment effects |
 
@@ -394,7 +445,7 @@ emergency sensor stop. They never advance or revise the experiment.
 
 Reliable, ordered, encrypted, bounded JSON/CBOR:
 
-- pairing/capabilities;
+- public descriptor-possession proof and capabilities;
 - leases and commands;
 - snapshots and revisions;
 - prepare/commit/cancel barriers;
@@ -633,7 +684,7 @@ their authority.
 
 All fields and decisions on this surface are WebXR-owned:
 
-- connect/pair and acquire/release control lease;
+- discover/connect the public target, or use the manual descriptor fallback;
 - participant/session present, route, language, XR/visibility;
 - current block, condition, media identity/hash, progress, pause/resume;
 - safe start, pause, resume, advance, back, abort, finalize;
@@ -663,9 +714,31 @@ All facts and effects on this surface are APK-derived:
   study's predeclared continue-with-gap policy.
 - Never expose participant IDs, demographics, answers, or raw ECG in public VDO
   discovery/status messages.
-- The headset wearer can revoke remote control and perform emergency stop locally.
+- The headset wearer can Pause the public browser planes, Rotate the public target
+  identity, and perform emergency stop locally. These controls do not add operator
+  authentication to the current open phase.
 
 ## Security and privacy
+
+### Public browser beacon (current prototype)
+
+The browser companion intentionally has no identity or access control in this
+phase. Its fixed passwordless VDO discovery room exposes only a bounded opaque
+handle and generic label, but that handle is sufficient to deterministically
+derive the BRSP key and data-only VDO room/stream tuple. Therefore any visitor to
+the public companion page who observes an online handle can request the same full
+bounded Study 6 operator profile. BRSP HMAC proof still binds messages to the
+derived descriptor and WebRTC protects the channels in transit, but neither fact
+authenticates a human or trusted device.
+
+The risk is limited by capability shape, not caller identity: the host accepts one
+controller at a time, routes only allowlisted `(scope, action, args)` commands,
+checks revisions and reducer state, and excludes arbitrary code/DOM input,
+questionnaire answers, consent, record deletion, exports, raw ECG, and immersive
+VR admission. That is adequate for the explicitly open prototype requested here,
+not for participant deployment. A later protected profile should add operator
+identity, target selection/approval policy, revocation and audit policy without
+changing the typed WebXR command surface.
 
 ### Local admission
 
@@ -690,9 +763,13 @@ https://example.github.io/spatial-study-6-webxr/
 
 ### VDO and relay admission
 
-The current AES-GCM envelope is a good base. Derive separate role keys for
-controller, WebXR, and sensor bridge rather than sharing one room secret with every
-viewer. The VDO room/stream ID is routing metadata, not authorization.
+The active browser path uses WebRTC/DTLS plus BRSP HMAC and does not use the older
+AES-GCM relay envelope. In public mode its room, stream, and key are reproducible
+from the advertised handle, so none of them is authorization. A future protected
+profile should introduce nonpublic, role-bound controller credentials rather
+than treating a VDO room, stream label, beacon handle, or peer UUID as identity.
+The separate APK launch token and loopback admission remain private and are not
+published through this beacon.
 
 If a secure WSS relay is added, end-to-end encrypt payloads so the relay sees only
 bounded routing/connection metadata. A relay or TURN receipt is never an
@@ -791,9 +868,10 @@ the browser does not stop recording.
 
 1. Consolidate shared v1 envelope/receipt primitives without merging the WebXR
    experiment vocabulary into the APK sensor vocabulary.
-2. Add WebXR-owned experiment and APK-derived sensor surfaces, role-derived keys,
-   leases, explicit local opt-in, emergency sensor stop, and privacy-minimized
-   snapshots.
+2. Preserve the current WebXR-owned experiment and APK-derived sensor surfaces,
+   one-controller bound, emergency sensor stop, and privacy-minimized snapshots;
+   replace the deliberately open public credential with role-bound operator
+   identity, admission, and revocation when moving beyond this prototype.
 3. Show pending/accepted/observed/failed/outcome-unknown state for every command.
 4. Add audit/export/finalization visibility and technical-hold workflows.
 5. Run TURN, reconnect, stale-message, controller-sleep, and multi-viewer tests.

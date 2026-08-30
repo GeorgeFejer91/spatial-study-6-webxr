@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mesmerprism.invalid/spatial-study-6/study6-bridge-v2.schema.json",
+  "title": "Study 6 WebXR sensor bridge envelope v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "bridgeProcessEpoch", "transportEpoch", "revision", "messageId", "sender", "target", "type", "payload"],
+  "properties": {
+    "protocol": { "const": "study6.bridge.v2" },
+    "sessionId": { "$ref": "#/$defs/sessionIdentity" },
+    "bridgeProcessEpoch": { "$ref": "#/$defs/identity" },
+    "browserPageEpoch": { "$ref": "#/$defs/identity" },
+    "transportEpoch": { "$ref": "#/$defs/identity" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "messageId": { "$ref": "#/$defs/identity" },
+    "correlationId": { "$ref": "#/$defs/identity" },
+    "expectedRevision": { "type": "integer", "minimum": 0 },
+    "deadlineElapsedRealtimeMs": { "type": "integer", "minimum": 1 },
+    "sender": {
+      "type": "object", "additionalProperties": false, "required": ["role", "instanceId"],
+      "properties": { "role": { "enum": ["apk", "webxr", "controller"] }, "instanceId": { "$ref": "#/$defs/identity" } }
+    },
+    "target": { "enum": ["apk", "webxr", "controller", "broadcast"] },
+    "type": { "enum": ["hello", "snapshot", "polar_status", "command", "receipt", "error"] },
+    "payload": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "hello" } }, "required": ["type"] },
+      "then": { "oneOf": [
+        {
+          "properties": {
+            "sender": { "type": "object", "properties": { "role": { "const": "apk" } }, "required": ["role"] },
+            "target": { "const": "webxr" }, "payload": { "$ref": "#/$defs/apkHelloPayload" }
+          }
+        },
+        {
+          "properties": {
+            "sender": { "type": "object", "properties": { "role": { "const": "webxr" } }, "required": ["role"] },
+            "target": { "const": "apk" }, "browserPageEpoch": { "$ref": "#/$defs/identity" },
+            "payload": { "$ref": "#/$defs/webxrHelloPayload" }
+          },
+          "required": ["browserPageEpoch"]
+        }
+      ] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "snapshot" } }, "required": ["type"] },
+      "then": { "properties": {
+        "sender": { "type": "object", "properties": { "role": { "const": "apk" } }, "required": ["role"] },
+        "target": { "const": "webxr" }, "payload": { "$ref": "#/$defs/snapshotPayload" }
+      } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "polar_status" } }, "required": ["type"] },
+      "then": { "properties": {
+        "sender": { "type": "object", "properties": { "role": { "const": "apk" } }, "required": ["role"] },
+        "target": { "const": "webxr" }, "payload": { "$ref": "#/$defs/polarStatusPayload" }
+      } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "command" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "sender": { "type": "object", "properties": { "role": { "const": "webxr" } }, "required": ["role"] },
+          "target": { "const": "apk" }, "browserPageEpoch": { "$ref": "#/$defs/identity" },
+          "expectedRevision": { "type": "integer", "minimum": 0 }, "payload": { "$ref": "#/$defs/commandPayload" }
+        },
+        "required": ["browserPageEpoch", "expectedRevision"]
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "receipt" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "sender": { "type": "object", "properties": { "role": { "const": "apk" } }, "required": ["role"] },
+          "target": { "const": "webxr" }, "correlationId": { "$ref": "#/$defs/identity" },
+          "payload": { "$ref": "#/$defs/receiptPayload" }
+        },
+        "required": ["correlationId"]
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "error" } }, "required": ["type"] },
+      "then": { "properties": {
+        "sender": { "type": "object", "properties": { "role": { "const": "apk" } }, "required": ["role"] },
+        "target": { "const": "webxr" }, "payload": { "$ref": "#/$defs/errorPayload" }
+      } }
+    }
+  ],
+  "$defs": {
+    "identity": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
+    "sessionIdentity": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,96}$" },
+    "launchIdentity": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,96}$" },
+    "apkHelloPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemaRevision", "buildId", "capabilities", "authority"],
+      "properties": {
+        "schemaRevision": { "const": 2 }, "buildId": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "capabilities": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "authority": { "const": "sensor_recorder_provider" }
+      }
+    },
+    "webxrHelloPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemaRevision", "buildId", "capabilities", "authority", "bridgeLaunch"],
+      "properties": {
+        "schemaRevision": { "const": 2 }, "buildId": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "capabilities": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "authority": { "const": "webxr_experiment_owner" }, "bridgeLaunch": { "$ref": "#/$defs/launchIdentity" }
+      }
+    },
+    "polarWriter": {
+      "type": "object", "additionalProperties": false, "required": ["phase", "healthy", "queueDepth", "storageFreeBytes"],
+      "properties": {
+        "phase": { "enum": ["idle", "recording", "fault"] }, "healthy": { "type": "boolean" },
+        "queueDepth": { "type": "integer", "minimum": 0 }, "storageFreeBytes": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "polarStatusPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["phase", "ready", "readinessReason", "heartRateBpm", "rrIntervalCount", "ecgSampleRateHz", "ecgSampleCount", "lastSampleAgeMs", "stableDurationMs", "previewKind", "waveformMicrovolts", "writer", "reconnectCount", "gapCount"],
+      "properties": {
+        "phase": { "enum": ["unavailable", "permission_required", "scanning", "detected", "connecting", "connected", "streaming", "fault"] },
+        "ready": { "type": "boolean" }, "readinessReason": { "type": "string", "maxLength": 256 },
+        "heartRateBpm": { "type": ["integer", "null"], "minimum": 20, "maximum": 260 },
+        "rrIntervalCount": { "type": "integer", "minimum": 0 },
+        "ecgSampleRateHz": { "type": ["integer", "null"], "minimum": 1, "maximum": 2000 },
+        "ecgSampleCount": { "type": "integer", "minimum": 0 },
+        "lastSampleAgeMs": { "type": ["integer", "null"], "minimum": 0 },
+        "stableDurationMs": { "type": ["integer", "null"], "minimum": 0 },
+        "previewKind": { "enum": ["none", "real_samples"] },
+        "waveformMicrovolts": { "type": "array", "maxItems": 256, "items": { "type": "number", "minimum": -10000000, "maximum": 10000000 } },
+        "writer": { "$ref": "#/$defs/polarWriter" }, "reconnectCount": { "type": "integer", "minimum": 0 },
+        "gapCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "snapshotPayload": {
+      "type": "object", "additionalProperties": false, "required": ["recording", "polar"],
+      "properties": {
+        "recording": {
+          "type": "object", "additionalProperties": false,
+          "required": ["recordingEpoch", "ownerSessionId", "state", "revision", "markerCount", "samplesWritten", "droppedBatches", "artifactOpen", "durable"],
+          "properties": {
+            "recordingEpoch": { "$ref": "#/$defs/identity" }, "ownerSessionId": { "oneOf": [{ "$ref": "#/$defs/sessionIdentity" }, { "type": "null" }] },
+            "state": { "enum": ["recording", "finalized", "fault"] }, "revision": { "type": "integer", "minimum": 0 },
+            "markerCount": { "type": "integer", "minimum": 0 }, "samplesWritten": { "type": "integer", "minimum": 0 },
+            "droppedBatches": { "type": "integer", "minimum": 0 }, "artifactOpen": { "type": "boolean" }, "durable": { "type": "boolean" }
+          }
+        },
+        "polar": { "$ref": "#/$defs/polarStatusPayload" }
+      }
+    },
+    "commandPayload": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["action", "sessionId", "webxrRevision", "recordingRequestId"],
+          "properties": {
+            "action": { "const": "begin_recording" }, "sessionId": { "$ref": "#/$defs/sessionIdentity" },
+            "webxrRevision": { "type": "integer", "minimum": 0 }, "recordingRequestId": { "$ref": "#/$defs/identity" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["action", "marker"],
+          "properties": { "action": { "const": "record_experiment_marker" }, "marker": { "$ref": "#/$defs/markerPayload" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["action"],
+          "properties": { "action": { "enum": ["request_status", "reconnect_sensor", "finalize_recording", "request_sensor_export", "return_to_experiment"] } }
+        }
+      ]
+    },
+    "markerPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["markerId", "eventType", "webxrRevision", "browserMonotonicMs", "browserUtc"],
+      "properties": {
+        "markerId": { "$ref": "#/$defs/identity" },
+        "eventType": { "enum": ["experiment_ready", "block_start_intent", "media_started", "media_paused", "media_resumed", "media_ended", "block_completed", "technical_hold", "session_finalized", "session_aborted"] },
+        "webxrRevision": { "type": "integer", "minimum": 0 }, "sessionId": { "$ref": "#/$defs/sessionIdentity" },
+        "blockOrder": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "conditionId": { "enum": ["HC_HE", "LC_HE", "HC_LE", "LC_LE"] }, "mediaId": { "$ref": "#/$defs/identity" },
+        "mediaPositionMs": { "type": "integer", "minimum": 0 }, "browserMonotonicMs": { "type": "integer", "minimum": 0 },
+        "browserUtc": { "type": "string", "format": "date-time" }
+      },
+      "allOf": [{
+        "if": { "properties": { "eventType": { "enum": ["block_start_intent", "media_started", "block_completed"] } }, "required": ["eventType"] },
+        "then": { "required": ["sessionId", "blockOrder", "conditionId", "mediaId"] }
+      }]
+    },
+    "receiptPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["commandMessageId", "stage", "outcome", "effectiveRevision"],
+      "properties": {
+        "commandMessageId": { "$ref": "#/$defs/identity" },
+        "stage": { "enum": ["received", "authorized", "accepted", "persisted", "applied", "observed"] },
+        "outcome": { "type": "string", "minLength": 1, "maxLength": 96 }, "detail": { "type": "string", "maxLength": 512 },
+        "effectiveRevision": { "type": "integer", "minimum": 0 }, "effectId": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "errorPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "detail", "currentRevision", "retryable"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z0-9_]{1,96}$" }, "detail": { "type": "string", "maxLength": 512 },
+        "currentRevision": { "type": "integer", "minimum": 0 }, "retryable": { "type": "boolean" }
+      }
+    }
+  }
+}

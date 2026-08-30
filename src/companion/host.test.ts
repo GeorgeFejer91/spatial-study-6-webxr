@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { STUDY6_BRSP_SCOPES } from './brsp-study6'
 import { CompanionHost } from './host'
 import {
+  createPairingDescriptor,
   decodePairingDescriptor,
   type CompanionStatus,
-  type RemoteCommandName,
+  type RemoteMutationCommandRequest,
 } from './protocol'
 import { CompanionViewer, type CommandAcknowledgement } from './viewer'
 import { decodeEnvelope } from './vendor/browser-remote-sync-protocol/brsp.js'
@@ -200,8 +201,12 @@ function makeStatus(revision: number, recordingRevision = 12): CompanionStatus {
     phase: 'stimulus',
     route: 'immersive-vr',
     language: 'en',
+    variant: 'DHS',
+    timingMode: 'full',
+    participantPrefix: 'PH',
     xrPresenting: true,
     participantActive: true,
+    completedBlockCount: 0,
     blockOrdinal: 1,
     condition: 'HC_HE',
     mediaElapsedSeconds: 3,
@@ -230,6 +235,8 @@ function makeStatus(revision: number, recordingRevision = 12): CompanionStatus {
     startPreflightReady: true,
     lastReceiptStage: 'observed',
     remoteControlEnabled: true,
+    remoteConfigureAllowed: false,
+    remoteParticipantStartAllowed: false,
     remoteAdvanceAllowed: false,
     remoteBackAllowed: false,
     remoteStartAllowed: false,
@@ -267,13 +274,13 @@ describe('companion host BRSP target', () => {
     let currentStatus = makeStatus(5)
     const handleCommand = vi.fn(
       async (
-        name: Exclude<RemoteCommandName, 'request_status'>,
+        request: RemoteMutationCommandRequest,
         expectedRevision: number,
       ) => {
         currentStatus = {
           ...currentStatus,
           revision: expectedRevision + 1,
-          mediaPaused: name === 'pause_media',
+          mediaPaused: request.name === 'pause_media',
           recordingRevision: 88,
         }
         return {
@@ -317,7 +324,7 @@ describe('companion host BRSP target', () => {
       // Advance authority without publishing it: the controller's explicit
       // expectedRevision=5 is now stale against the WebXR-owned revision 6.
       currentStatus = { ...currentStatus, revision: 6 }
-      const staleCommandId = await viewer.sendCommand('pause_media')
+      const staleCommandId = await viewer.sendCommand({ name: 'pause_media', args: {} })
       await vi.waitFor(() => {
         expect(acknowledgements.find(({ commandId }) => commandId === staleCommandId)).toMatchObject({
           accepted: false,
@@ -328,7 +335,7 @@ describe('companion host BRSP target', () => {
       }, { timeout: 3_000 })
       expect(handleCommand).not.toHaveBeenCalled()
 
-      const appliedCommandId = await viewer.sendCommand('pause_media')
+      const appliedCommandId = await viewer.sendCommand({ name: 'pause_media', args: {} })
       await vi.waitFor(() => {
         expect(acknowledgements.find(({ commandId }) => commandId === appliedCommandId)).toMatchObject({
           accepted: true,
@@ -341,7 +348,7 @@ describe('companion host BRSP target', () => {
           && entry.remoteCommandReceiptId === appliedCommandId
         ))).toBe(true)
       }, { timeout: 3_000 })
-      expect(handleCommand).toHaveBeenCalledWith('pause_media', 6)
+      expect(handleCommand).toHaveBeenCalledWith({ name: 'pause_media', args: {} }, 6)
 
       const targetControlMessages = network.channels
         .filter(({ owner, channel }) => (
@@ -490,6 +497,27 @@ describe('companion host BRSP target', () => {
       }, { timeout: 3_000 })
     } finally {
       await viewer?.stop()
+      await host.stop()
+    }
+  })
+
+  it('reuses the exact validated trusted-operator descriptor across host restarts', async () => {
+    window.VDONinjaSDK = FakeVdoSdk
+    const trusted = createPairingDescriptor(true)
+    const { canvas } = canvasWithTrack()
+    const host = new CompanionHost({
+      getStatus: () => makeStatus(14),
+      handleCommand: vi.fn(),
+    })
+
+    try {
+      const first = await host.start(canvas, false, trusted)
+      expect(decodePairingDescriptor(new URL(first.pairingUrl ?? '').hash)).toEqual(trusted)
+      await host.stop()
+
+      const second = await host.start(canvas, false, trusted)
+      expect(decodePairingDescriptor(new URL(second.pairingUrl ?? '').hash)).toEqual(trusted)
+    } finally {
       await host.stop()
     }
   })

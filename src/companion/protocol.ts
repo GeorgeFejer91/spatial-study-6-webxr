@@ -7,8 +7,8 @@ import {
 const base64UrlPattern = /^[A-Za-z0-9_-]+$/
 const publicTokenPattern = /^[a-z0-9_-]+$/
 
-/** Controller intents target the WebXR experiment owner, not the sensor APK. */
-export const remoteCommandNames = [
+/** Commands with a deliberately empty application argument object. */
+export const simpleRemoteCommandNames = [
   'request_status',
   'recenter_panel',
   'start_block',
@@ -23,7 +23,88 @@ export const remoteCommandNames = [
   'request_export',
 ] as const
 
+export type SimpleRemoteCommandName = (typeof simpleRemoteCommandNames)[number]
+export const mutationSimpleRemoteCommandNames = [
+  'recenter_panel',
+  'start_block',
+  'pause_media',
+  'resume_media',
+  'advance',
+  'back',
+  'abort_session',
+  'finalize_session',
+  'reconnect_sensor',
+  'return_to_experiment',
+  'request_export',
+] as const satisfies readonly Exclude<SimpleRemoteCommandName, 'request_status'>[]
+
+/** Controller intents target the WebXR experiment owner, not the sensor APK. */
+export const remoteCommandNames = [
+  'configure_study',
+  'start_participant',
+  ...simpleRemoteCommandNames,
+] as const
+
 export type RemoteCommandName = (typeof remoteCommandNames)[number]
+
+const EmptyRemoteCommandArgsSchema = z.object({}).strict()
+
+export const ConfigureStudyCommandArgsSchema = z.object({
+  variantId: z.enum(['DHS', 'SHD']),
+  languageCode: z.enum(['en', 'de']),
+  timingMode: z.enum(['full', 'clipped']),
+}).strict()
+
+export const StartParticipantCommandArgsSchema = z.object({
+  participantId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(32)
+    .regex(/^[A-Za-z0-9_-]+$/u),
+}).strict()
+
+const SimpleRemoteCommandRequestSchema = z.object({
+  name: z.enum(simpleRemoteCommandNames),
+  args: EmptyRemoteCommandArgsSchema,
+}).strict()
+
+/**
+ * The complete Study 6 semantic command surface. The union is data-only and
+ * deliberately has no selector, event, HTML, URL, script, answer, demographic,
+ * consent, or arbitrary method field.
+ */
+export const RemoteCommandRequestSchema = z.union([
+  z.object({
+    name: z.literal('configure_study'),
+    args: ConfigureStudyCommandArgsSchema,
+  }).strict(),
+  z.object({
+    name: z.literal('start_participant'),
+    args: StartParticipantCommandArgsSchema,
+  }).strict(),
+  SimpleRemoteCommandRequestSchema,
+])
+
+export type RemoteCommandRequest = z.infer<typeof RemoteCommandRequestSchema>
+export const RemoteMutationCommandRequestSchema = z.union([
+  z.object({
+    name: z.literal('configure_study'),
+    args: ConfigureStudyCommandArgsSchema,
+  }).strict(),
+  z.object({
+    name: z.literal('start_participant'),
+    args: StartParticipantCommandArgsSchema,
+  }).strict(),
+  z.object({
+    name: z.enum(mutationSimpleRemoteCommandNames),
+    args: EmptyRemoteCommandArgsSchema,
+  }).strict(),
+])
+
+export type RemoteMutationCommandRequest = z.infer<
+  typeof RemoteMutationCommandRequestSchema
+>
 
 export const RelayDescriptorSchema = z.object({
   protocol: z.literal('study6.relay.v1'),
@@ -64,8 +145,12 @@ export const CompanionStatusSchema = z.object({
   phase: z.string().min(1).max(80),
   route: z.enum(['browser', 'immersive-vr']),
   language: z.enum(['en', 'de']),
+  variant: z.enum(['DHS', 'SHD']).nullable(),
+  timingMode: z.enum(['full', 'clipped']).nullable(),
+  participantPrefix: z.enum(['PH', 'PI']).nullable(),
   xrPresenting: z.boolean(),
   participantActive: z.boolean(),
+  completedBlockCount: z.number().int().min(0).max(4),
   blockOrdinal: z.number().int().min(0).max(4).nullable(),
   condition: z.string().max(32).nullable(),
   mediaElapsedSeconds: z.number().min(0).max(86_400).nullable(),
@@ -115,6 +200,8 @@ export const CompanionStatusSchema = z.object({
     .nullable()
     .optional(),
   remoteControlEnabled: z.boolean(),
+  remoteConfigureAllowed: z.boolean(),
+  remoteParticipantStartAllowed: z.boolean(),
   remoteAdvanceAllowed: z.boolean(),
   remoteBackAllowed: z.boolean(),
   remoteStartAllowed: z.boolean(),
@@ -140,9 +227,9 @@ export const CompanionMessageSchema = z.discriminatedUnion('kind', [
     ...messageBase,
     kind: z.literal('command'),
     commandId: z.string().uuid(),
-    name: z.enum(remoteCommandNames),
+    request: RemoteCommandRequestSchema,
     expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  }),
+  }).strict(),
   z.object({
     ...messageBase,
     kind: z.literal('ack'),
@@ -183,6 +270,10 @@ export function fromBase64Url(value: string): Uint8Array<ArrayBuffer> {
   const binary = atob(value.replaceAll('-', '+').replaceAll('_', '/') + padding)
   const bytes = new Uint8Array(new ArrayBuffer(binary.length))
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  // Reject alternate spellings whose unused trailing bits decode to the same
+  // bytes. Wire envelopes, replay fingerprints, and transcript proofs all use
+  // one canonical unpadded base64url representation.
+  if (toBase64Url(bytes) !== value) throw new Error('Non-canonical base64url value.')
   return bytes
 }
 

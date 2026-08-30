@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { acquisitionSnapshotPayload, readyPolarProjection } from '../test/bridge-fixtures.ts'
 import {
   disconnectedPolarStatus,
+  parseBridgeExperimentMarker,
   parseBridgeInboundEnvelope,
+  parseBridgeOutboundEnvelope,
   polarProjectionIsReady,
   STUDY_BRIDGE_PROTOCOL,
   type BridgeEnvelope,
@@ -25,13 +27,14 @@ function snapshotEnvelope(): BridgeEnvelope<'snapshot', BridgeSnapshotPayload> {
   }
 }
 
-describe('study6.bridge.v1 contract', () => {
+describe('study6.bridge.v2 contract', () => {
   it('accepts the bounded recording snapshot from the APK sensor provider', () => {
     const message = parseBridgeInboundEnvelope(snapshotEnvelope())
     expect(message.type).toBe('snapshot')
     if (message.type !== 'snapshot') throw new Error('Expected snapshot.')
     expect(message.payload.recording).toMatchObject({
       recordingEpoch: 'recording-epoch-1',
+      ownerSessionId: null,
       state: 'recording',
       revision: 0,
     })
@@ -104,5 +107,79 @@ describe('study6.bridge.v1 contract', () => {
       },
     }
     expect(() => parseBridgeInboundEnvelope(receipt)).toThrow(/correlationId/u)
+  })
+
+  it.each(['block_start_intent', 'media_started', 'block_completed'] as const)(
+    'requires the complete block tuple for %s markers',
+    (eventType) => {
+      const marker = {
+        markerId: `marker-${eventType}`,
+        eventType,
+        webxrRevision: 8,
+        browserMonotonicMs: 12_000,
+        browserUtc: '2026-08-30T12:00:00Z',
+      }
+      expect(() => parseBridgeExperimentMarker(marker)).toThrow()
+      expect(
+        parseBridgeExperimentMarker({
+          ...marker,
+          sessionId: 'session-001',
+          blockOrder: 1,
+          conditionId: 'HC_HE',
+          mediaId: 'Hand_HC_HE',
+        }),
+      ).toMatchObject({ eventType, sessionId: 'session-001' })
+    },
+  )
+
+  it('binds recording and marker payload sessions to their command envelopes', () => {
+    const common = {
+      protocol: STUDY_BRIDGE_PROTOCOL,
+      sessionId: 'session-001',
+      bridgeProcessEpoch: 'apk-process-1',
+      browserPageEpoch: 'browser-page-1',
+      transportEpoch: 'transport-1',
+      revision: 0,
+      messageId: 'command-1',
+      expectedRevision: 0,
+      sender: { role: 'webxr', instanceId: 'browser-1' },
+      target: 'apk',
+      type: 'command',
+    }
+    const begin = {
+      ...common,
+      payload: {
+        action: 'begin_recording',
+        sessionId: 'session-001',
+        webxrRevision: 7,
+        recordingRequestId: 'recording-request-1',
+      },
+    }
+    expect(parseBridgeOutboundEnvelope(begin)).toMatchObject({ sessionId: 'session-001' })
+    expect(() =>
+      parseBridgeOutboundEnvelope({ ...begin, sessionId: 'different-session' }),
+    ).toThrow(/must match payload.sessionId/u)
+
+    const marker = {
+      ...common,
+      payload: {
+        action: 'record_experiment_marker',
+        marker: {
+          markerId: 'marker-1',
+          eventType: 'media_started',
+          webxrRevision: 8,
+          sessionId: 'session-001',
+          blockOrder: 1,
+          conditionId: 'HC_HE',
+          mediaId: 'Hand_HC_HE',
+          browserMonotonicMs: 12_000,
+          browserUtc: '2026-08-30T12:00:00Z',
+        },
+      },
+    }
+    expect(parseBridgeOutboundEnvelope(marker)).toMatchObject({ sessionId: 'session-001' })
+    expect(() =>
+      parseBridgeOutboundEnvelope({ ...marker, sessionId: 'different-session' }),
+    ).toThrow(/must match marker.sessionId/u)
   })
 })

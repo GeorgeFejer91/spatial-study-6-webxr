@@ -8,8 +8,12 @@ const status: CompanionStatus = {
   phase: 'complete',
   route: 'browser',
   language: 'en',
+  variant: 'DHS',
+  timingMode: 'clipped',
+  participantPrefix: 'PH',
   xrPresenting: false,
   participantActive: true,
+  completedBlockCount: 4,
   blockOrdinal: 4,
   condition: 'HC_HE',
   mediaElapsedSeconds: null,
@@ -38,6 +42,8 @@ const status: CompanionStatus = {
   startPreflightReady: false,
   lastReceiptStage: 'observed',
   remoteControlEnabled: true,
+  remoteConfigureAllowed: false,
+  remoteParticipantStartAllowed: false,
   remoteAdvanceAllowed: false,
   remoteBackAllowed: false,
   remoteStartAllowed: false,
@@ -47,6 +53,25 @@ const status: CompanionStatus = {
 }
 
 describe('companion command availability', () => {
+  it('uses target-returned phase gates for setup and participant allocation', () => {
+    expect(companionCommandAllowed('configure_study', true, {
+      ...status,
+      phase: 'operator_setup',
+      remoteConfigureAllowed: true,
+    })).toBe(true)
+    expect(companionCommandAllowed('start_participant', true, {
+      ...status,
+      phase: 'participant_id',
+      participantActive: false,
+      remoteParticipantStartAllowed: true,
+    })).toBe(true)
+    expect(companionCommandAllowed('configure_study', true, status)).toBe(false)
+    expect(companionCommandAllowed('start_participant', false, {
+      ...status,
+      remoteParticipantStartAllowed: true,
+    })).toBe(false)
+  })
+
   it('requires a connected, actively recording APK before finalization', () => {
     expect(companionCommandAllowed('finalize_session', true, status)).toBe(true)
     expect(companionCommandAllowed('finalize_session', true, { ...status, bridgeConnected: false })).toBe(false)

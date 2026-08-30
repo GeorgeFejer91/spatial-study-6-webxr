@@ -75,7 +75,7 @@ if (signingKeyPem) {
   }
 }
 
-const bridgeSchemaPath = resolve(repositoryRoot, 'contracts', 'study6-bridge-v1.schema.json')
+const bridgeSchemaPath = resolve(repositoryRoot, 'contracts', 'study6-bridge-v2.schema.json')
 const brspCorePath = resolve(
   repositoryRoot,
   'src',
@@ -96,7 +96,7 @@ const manifest = {
       process.env.STUDY6_NATIVE_BRIDGE_SOURCE_REVISION?.trim() || 'unqualified-worktree',
     apk_version: process.env.STUDY6_NATIVE_BRIDGE_APK_VERSION?.trim() || null,
     apk_sha256: optionalSha256('STUDY6_NATIVE_BRIDGE_APK_SHA256'),
-    contract_protocol: 'study6.bridge.v1',
+    contract_protocol: 'study6.bridge.v2',
     contract_schema_sha256: await sha256File(bridgeSchemaPath),
   },
   remote_control: {

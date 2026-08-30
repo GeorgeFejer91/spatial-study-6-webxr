@@ -8,6 +8,7 @@ import {
   encryptCompanionMessage,
   nowIso,
   ReplayWindow,
+  RemoteCommandRequestSchema,
   remoteCommandNames,
   SequenceReplayGuard,
 } from './protocol'
@@ -46,7 +47,7 @@ describe('companion pairing protocol', () => {
       sequence: 1,
       sentAt: nowIso(),
       commandId: crypto.randomUUID(),
-      name: 'pause_media' as const,
+      request: { name: 'pause_media' as const, args: {} },
       expectedRevision: 19,
     }
     const encrypted = await encryptCompanionMessage(descriptor.key, message)
@@ -73,6 +74,8 @@ describe('companion pairing protocol', () => {
 
   it('uses the same bounded command names as the study reducer seam', () => {
     expect(remoteCommandNames).toEqual([
+      'configure_study',
+      'start_participant',
       'request_status',
       'recenter_panel',
       'start_block',
@@ -86,6 +89,29 @@ describe('companion pairing protocol', () => {
       'return_to_experiment',
       'request_export',
     ])
+  })
+
+  it('strictly validates configuration and participant command arguments', () => {
+    expect(RemoteCommandRequestSchema.parse({
+      name: 'configure_study',
+      args: { variantId: 'DHS', languageCode: 'en', timingMode: 'full' },
+    })).toMatchObject({ name: 'configure_study' })
+    expect(RemoteCommandRequestSchema.parse({
+      name: 'start_participant',
+      args: { participantId: 'PH1' },
+    })).toEqual({ name: 'start_participant', args: { participantId: 'PH1' } })
+    expect(() => RemoteCommandRequestSchema.parse({
+      name: 'configure_study',
+      args: { variantId: 'DHS', languageCode: 'en', timingMode: 'full', html: '<button>' },
+    })).toThrow()
+    expect(() => RemoteCommandRequestSchema.parse({
+      name: 'start_participant',
+      args: { participantId: 'PH1', consent: true },
+    })).toThrow()
+    expect(() => RemoteCommandRequestSchema.parse({
+      name: 'advance',
+      args: { answer: 5 },
+    })).toThrow()
   })
 
   it('rejects an old application sequence even after unrelated messages', () => {

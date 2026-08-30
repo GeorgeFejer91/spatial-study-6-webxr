@@ -1,0 +1,15 @@
+{
+  "protocol": "study6.bridge.v2",
+  "sessionId": "TEST_SESSION_001",
+  "bridgeProcessEpoch": "bridge-process-001",
+  "browserPageEpoch": "browser-page-001",
+  "transportEpoch": "loopback-001",
+  "revision": 7,
+  "messageId": "command-001",
+  "expectedRevision": 7,
+  "deadlineElapsedRealtimeMs": 90000,
+  "sender": { "role": "webxr", "instanceId": "webxr-001" },
+  "target": "apk",
+  "type": "command",
+  "payload": { "action": "request_status" }
+}

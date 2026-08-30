@@ -1,5 +1,5 @@
 import type {
-  BridgeHelloPayload,
+  ApkBridgeHelloPayload,
   BridgeSnapshotPayload,
   PolarStatusProjection,
 } from '../bridge/index.ts'
@@ -28,15 +28,18 @@ export function readyPolarProjection(): PolarStatusProjection {
   }
 }
 
-export function apkHelloPayload(): BridgeHelloPayload {
+export function apkHelloPayload(): ApkBridgeHelloPayload {
   return {
-    schemaRevision: 1,
-    buildId: 'sensor-bridge-0.1.0',
+    schemaRevision: 2,
+    buildId: 'sensor-bridge-0.2.0',
     capabilities: [
       'polar_h10_ecg',
       'durable_ecg',
-      'experiment_metadata_markers',
+      'durable_markers',
       'staged_receipts',
+      'begin_recording',
+      'session_owned_recording',
+      'polar_status_projection',
     ],
     authority: 'sensor_recorder_provider',
   }
@@ -69,6 +72,7 @@ export function acquisitionSnapshotPayload(
   return {
     recording: {
       recordingEpoch: 'recording-epoch-1',
+      ownerSessionId: null,
       state: 'recording',
       revision,
       markerCount: revision,

@@ -1,9 +1,16 @@
 import { z } from 'zod'
 
-export const STUDY_BRIDGE_PROTOCOL = 'study6.bridge.v1' as const
-export const STUDY_BRIDGE_SCHEMA_REVISION = 1 as const
+export const STUDY_BRIDGE_PROTOCOL = 'study6.bridge.v2' as const
+export const STUDY_BRIDGE_SCHEMA_REVISION = 2 as const
 export const MAX_STUDY_BRIDGE_MESSAGE_BYTES = 65_536 as const
 export const PLACEHOLDER_STIMULUS_MODE = 'placeholder.v1' as const
+
+export const REQUIRED_APK_BRIDGE_CAPABILITIES = [
+  'begin_recording',
+  'session_owned_recording',
+  'durable_markers',
+  'polar_status_projection',
+] as const
 
 export type BridgeRole = 'apk' | 'webxr' | 'controller'
 export type BridgeTarget = 'apk' | 'webxr' | 'controller' | 'broadcast'
@@ -88,6 +95,7 @@ export type SensorRecordingState = 'recording' | 'finalized' | 'fault'
 
 export interface SensorRecordingProjection {
   recordingEpoch: string
+  ownerSessionId: string | null
   state: SensorRecordingState
   revision: number
   markerCount: number
@@ -97,12 +105,22 @@ export interface SensorRecordingProjection {
   durable: boolean
 }
 
-export interface BridgeHelloPayload {
+interface BridgeHelloPayloadBase {
   schemaRevision: typeof STUDY_BRIDGE_SCHEMA_REVISION
   buildId: string
   capabilities: readonly string[]
-  authority: 'sensor_recorder_provider' | 'webxr_experiment_owner'
 }
+
+export interface ApkBridgeHelloPayload extends BridgeHelloPayloadBase {
+  authority: 'sensor_recorder_provider'
+}
+
+export interface WebXrBridgeHelloPayload extends BridgeHelloPayloadBase {
+  authority: 'webxr_experiment_owner'
+  bridgeLaunch: string
+}
+
+export type BridgeHelloPayload = ApkBridgeHelloPayload | WebXrBridgeHelloPayload
 
 export const BRIDGE_RECEIPT_STAGES = [
   'received',
@@ -134,6 +152,7 @@ export interface BridgeErrorPayload {
 export const BRIDGE_SENSOR_ACTIONS = [
   'request_status',
   'reconnect_sensor',
+  'begin_recording',
   'record_experiment_marker',
   'finalize_recording',
   'request_sensor_export',
@@ -172,20 +191,26 @@ export interface BridgeExperimentMarker {
 }
 
 export type BridgeCommandPayload =
+  | {
+      action: 'begin_recording'
+      sessionId: string
+      webxrRevision: number
+      recordingRequestId: string
+    }
   | { action: 'record_experiment_marker'; marker: BridgeExperimentMarker }
   | {
-      action: Exclude<BridgeSensorAction, 'record_experiment_marker'>
+      action: Exclude<BridgeSensorAction, 'begin_recording' | 'record_experiment_marker'>
     }
 
 export type BridgeInboundEnvelope =
-  | BridgeEnvelope<'hello', BridgeHelloPayload>
+  | BridgeEnvelope<'hello', ApkBridgeHelloPayload>
   | BridgeEnvelope<'snapshot', BridgeSnapshotPayload>
   | BridgeEnvelope<'polar_status', PolarStatusProjection>
   | BridgeEnvelope<'receipt', BridgeReceiptPayload>
   | BridgeEnvelope<'error', BridgeErrorPayload>
 
 export type BridgeOutboundEnvelope =
-  | BridgeEnvelope<'hello', BridgeHelloPayload>
+  | BridgeEnvelope<'hello', WebXrBridgeHelloPayload>
   | BridgeEnvelope<'command', BridgeCommandPayload>
 
 const senderSchema = z.object({
@@ -210,12 +235,26 @@ const envelopeSchema = z.object({
   payload: z.unknown(),
 }).strict()
 
-const helloSchema = z.object({
+const apkHelloSchema = z.object({
   schemaRevision: z.literal(STUDY_BRIDGE_SCHEMA_REVISION),
   buildId: z.string().min(1).max(96),
   capabilities: z.array(z.string().min(1).max(128)).max(64),
-  authority: z.enum(['sensor_recorder_provider', 'webxr_experiment_owner']),
+  authority: z.literal('sensor_recorder_provider'),
 }).strict()
+
+const webXrHelloSchema = z.object({
+  schemaRevision: z.literal(STUDY_BRIDGE_SCHEMA_REVISION),
+  buildId: z.string().min(1).max(96),
+  capabilities: z.array(z.string().min(1).max(128)).max(64),
+  authority: z.literal('webxr_experiment_owner'),
+  bridgeLaunch: z.string().regex(/^[A-Za-z0-9_-]{16,96}$/u),
+}).strict()
+
+const BLOCK_TUPLE_MARKER_TYPES = new Set<ExperimentMarkerEventType>([
+  'block_start_intent',
+  'media_started',
+  'block_completed',
+])
 
 const experimentMarkerSchema = z.object({
   markerId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u),
@@ -228,7 +267,18 @@ const experimentMarkerSchema = z.object({
   mediaPositionMs: z.number().int().nonnegative().optional(),
   browserMonotonicMs: z.number().int().nonnegative(),
   browserUtc: z.string().datetime({ offset: true }),
-}).strict()
+}).strict().superRefine((marker, context) => {
+  if (!BLOCK_TUPLE_MARKER_TYPES.has(marker.eventType)) return
+  for (const field of ['sessionId', 'blockOrder', 'conditionId', 'mediaId'] as const) {
+    if (marker[field] === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: [field],
+        message: `${marker.eventType} requires ${field}.`,
+      })
+    }
+  }
+})
 
 const polarStatusSchema = z.object({
   phase: z.enum([
@@ -264,6 +314,7 @@ const polarStatusSchema = z.object({
 const snapshotSchema = z.object({
   recording: z.object({
     recordingEpoch: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u),
+    ownerSessionId: z.string().regex(/^[A-Za-z0-9._-]{1,96}$/u).nullable(),
     state: z.enum(['recording', 'finalized', 'fault']),
     revision: z.number().int().nonnegative(),
     markerCount: z.number().int().nonnegative(),
@@ -274,6 +325,34 @@ const snapshotSchema = z.object({
   }).strict(),
   polar: polarStatusSchema,
 }).strict()
+
+const beginRecordingCommandSchema = z.object({
+  action: z.literal('begin_recording'),
+  sessionId: z.string().regex(/^[A-Za-z0-9._-]{1,96}$/u),
+  webxrRevision: z.number().int().nonnegative(),
+  recordingRequestId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u),
+}).strict()
+
+const markerCommandSchema = z.object({
+  action: z.literal('record_experiment_marker'),
+  marker: experimentMarkerSchema,
+}).strict()
+
+const noArgumentCommandSchema = z.object({
+  action: z.enum([
+    'request_status',
+    'reconnect_sensor',
+    'finalize_recording',
+    'request_sensor_export',
+    'return_to_experiment',
+  ]),
+}).strict()
+
+const commandSchema = z.discriminatedUnion('action', [
+  beginRecordingCommandSchema,
+  markerCommandSchema,
+  noArgumentCommandSchema,
+])
 
 const receiptSchema = z.object({
   commandMessageId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u),
@@ -349,6 +428,13 @@ export function bridgeReceiptStageIndex(stage: BridgeReceiptStage): number {
   return BRIDGE_RECEIPT_STAGES.indexOf(stage)
 }
 
+export function missingRequiredApkBridgeCapabilities(
+  capabilities: readonly string[],
+): readonly (typeof REQUIRED_APK_BRIDGE_CAPABILITIES)[number][] {
+  const advertised = new Set(capabilities)
+  return REQUIRED_APK_BRIDGE_CAPABILITIES.filter((capability) => !advertised.has(capability))
+}
+
 export function parseBridgeExperimentMarker(value: unknown): BridgeExperimentMarker {
   return experimentMarkerSchema.parse(value)
 }
@@ -363,7 +449,7 @@ export function parseBridgeInboundEnvelope(value: unknown): BridgeInboundEnvelop
   }
   switch (envelope.type) {
     case 'hello':
-      return { ...envelope, type: 'hello', payload: helloSchema.parse(envelope.payload) }
+      return { ...envelope, type: 'hello', payload: apkHelloSchema.parse(envelope.payload) }
     case 'snapshot': {
       const payload = snapshotSchema.parse(envelope.payload)
       return {
@@ -390,4 +476,43 @@ export function parseBridgeInboundEnvelope(value: unknown): BridgeInboundEnvelop
     case 'command':
       throw new Error('The APK cannot send a command through the WebXR client channel.')
   }
+}
+
+/**
+ * Validates the WebXR-to-APK route, including cross-field session ownership
+ * constraints which Draft 2020-12 JSON Schema cannot express portably.
+ */
+export function parseBridgeOutboundEnvelope(value: unknown): BridgeOutboundEnvelope {
+  const envelope = envelopeSchema.parse(value)
+  if (envelope.sender.role !== 'webxr') {
+    throw new Error(`Outbound bridge sender must be webxr, received ${envelope.sender.role}.`)
+  }
+  if (envelope.target !== 'apk') {
+    throw new Error(`Outbound WebXR message must target apk, received ${envelope.target}.`)
+  }
+  if (envelope.browserPageEpoch === undefined) {
+    throw new Error('Outbound WebXR messages must bind browserPageEpoch.')
+  }
+
+  if (envelope.type === 'hello') {
+    return { ...envelope, type: 'hello', payload: webXrHelloSchema.parse(envelope.payload) }
+  }
+  if (envelope.type !== 'command') {
+    throw new Error(`WebXR cannot send ${envelope.type} through the APK client channel.`)
+  }
+  if (envelope.expectedRevision === undefined) {
+    throw new Error('Outbound bridge commands must bind expectedRevision.')
+  }
+
+  const payload = commandSchema.parse(envelope.payload)
+  if (payload.action === 'begin_recording' && envelope.sessionId !== payload.sessionId) {
+    throw new Error('begin_recording envelope sessionId must match payload.sessionId.')
+  }
+  if (
+    payload.action === 'record_experiment_marker' &&
+    envelope.sessionId !== payload.marker.sessionId
+  ) {
+    throw new Error('Experiment marker envelope sessionId must match marker.sessionId.')
+  }
+  return { ...envelope, type: 'command', payload }
 }

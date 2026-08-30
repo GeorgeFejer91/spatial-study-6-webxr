@@ -7,7 +7,7 @@
 
 This service is an optional routing scaffold among the researcher controller, the WebXR
 experiment owner, and the headset sensor bridge. It does not interpret BRSP or
-`study6.bridge.v1` commands and must never be a session authority. After the first bounded
+`study6.bridge.v2` commands and must never be a session authority. After the first bounded
 authentication message, text and binary frames are routed opaquely to the other authenticated
 roles in the room.
 

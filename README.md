@@ -17,7 +17,7 @@ authenticated loopback WebSocket.
 The intended public endpoints are:
 
 - experiment: <https://georgefejer91.github.io/spatial-study-6-webxr/>
-- optional operator companion:
+- public operator companion:
   <https://georgefejer91.github.io/spatial-study-6-webxr/companion.html>
 
 ## What is implemented
@@ -32,7 +32,8 @@ The intended public endpoints are:
 - the exact V01–V04 English/German guided-audio set used by the pinned source;
 - four questionnaire rounds covering SAM, affect, emotions, ownership, and
   agency;
-- a strict sensor-recorder `study6.bridge.v1` client with
+- a strict sensor-recorder `study6.bridge.v2` client with launch binding,
+  session-owned `begin_recording`,
   process/page/transport epochs, recording-revision fencing, staged effect
   receipts, and native golden fixtures;
 - a live, bounded Polar quality status/waveform populated only by real APK samples;
@@ -43,9 +44,10 @@ The intended public endpoints are:
 - explicit APK sensor reconnect, recorder finalize, and sensor-export requests;
 - decoded Web Audio and clock/barrier libraries ready for later hardware timing
   integration; and
-- an explicitly enabled, data-only VDO.Ninja companion that issues only
-  WebRTC/DTLS-protected, bounded, revision-checked study commands to WebXR,
-  with optional spectator monitoring kept off by default.
+- an automatic public browser-to-browser beacon: a bare `companion.html` visit
+  discovers an online WebXR target, derives its data-only BRSP/VDO descriptor,
+  and requests the full bounded, revision-checked Study 6 operator profile;
+  optional spectator monitoring remains a separate plane and is off by default.
 
 The normal timing mode runs each block for five minutes. The clipped mode runs
 ten-second blocks for diagnostics only. Both routes remain test-only and
@@ -60,17 +62,18 @@ npm ci
 npm run dev
 ```
 
-Open the local URL printed by Vite. WebXR owns study state in every mode. Polar
-H10 and durable-writer readiness are advisory quality evidence: missing evidence
-marks the run quality-ineligible but never disables Start or questionnaire/data
-collection. For isolated questionnaire/UI work, use:
+Open the local URL printed by Vite. WebXR owns study state in every mode. Block
+Start is fail-closed until the APK reports fresh real 130 Hz Polar H10 samples
+and a healthy durable writer; the WebXR controller rechecks that gate even for
+remote commands. For isolated questionnaire/UI work, use:
 
 ```text
 ?sensor=disabled-rehearsal
 ```
 
-That explicit route runs without the APK bridge and remains participant-ineligible.
-It uses the same origin-scoped browser study store as hybrid mode.
+That explicit route runs without the APK bridge and remains participant-ineligible;
+its acquisition Start gate intentionally stays locked. It uses the same
+origin-scoped browser study store as hybrid mode.
 A compatible headset browser on an HTTPS origin exposes **Enter VR**.
 WebXR immersive sessions generally require a secure context; a plain HTTP LAN
 URL is useful for desktop checking but may not be admitted by a headset.
@@ -89,39 +92,63 @@ At operator setup:
 In every mode, WebXR recovers the study session from the same browser profile
 and offers study JSON/CSV export. In hybrid mode, the APK separately keeps the
 durable ECG samples and marker journal and owns finalization/export of that
-sensor artifact.
+sensor artifact. After WebXR durably allocates or recovers a session, it sends
+one stable `begin_recording` request and waits for a matching session-owned
+recording snapshot before demographics can be submitted or a block can start.
 
-## Optional companion
+## Browser companion public prototype
 
-Pairing is off by default. In the experiment, select **Browser companion**,
-then explicitly enable a pairing session. Scan or copy the generated fragment
-URL into `companion.html`. Remote control is a second opt-in and starts off.
-The session link can reconnect one controller at a time until pairing is stopped
-on the headset; starting a new pairing session creates a new descriptor.
+The current prototype is zero-click and browser-to-browser. While the experiment
+page is open, WebXR automatically starts a passwordless public availability
+announcement and its data-only BRSP target without opening a dialog or changing
+focus. Open the bare public [`companion.html`](https://georgefejer91.github.io/spatial-study-6-webxr/companion.html)
+URL on a phone or computer. It listens for Study 6 announcements, sorts the
+opaque target handles, selects the first one deterministically, derives the same
+BRSP/VDO descriptor, and connects and retries automatically. No QR scan, copied
+link, or headset confirmation is required for this browser pairing, and the APK
+does not participate in it. If discovery is unavailable, the headset's **Browser
+companion** dialog still exposes a direct QR/link, and the companion retains a
+manual link/code input as a fallback.
 
-The companion uses BRSP/1 over two dedicated data-only WebRTC channels: reliable
-ordered commands/receipts and unordered latest-state telemetry. The peers prove
-the random 256-bit session secret mutually, negotiate narrow scopes, and fence
-commands with the authoritative WebXR revision. It can request status, recenter
-the panel, start an admissible block, pause/resume media, navigate, request
-sensor reconnect/return, and explicitly confirm a WebXR-owned abort or an APK
-recorder finalize/sensor-export request.
-It cannot enter participant data, answer questionnaires, grant consent, enter
-VR, receive an export, or delete records. Today it routes through the active
-WebXR page; the experimental relay is not production-wired, and direct APK
-control during a browser failure is not implemented. Read-only pairing grants
-only `study.status.read`; mutation scopes must be enabled before pairing starts.
-Optional spectator monitoring is a separate plane and is off by default.
+The public descriptor is reproducible by design. The target persists a random
+seed, publishes only a truncated SHA-256-derived opaque beacon handle, and both
+browsers use domain-separated SHA-256 derivations of that handle for the BRSP
+key and separate VDO room/stream names. Consequently, this phase intentionally
+has **no operator identity or access control**: any visitor who can see the public
+beacon can derive the same descriptor and request control. BRSP mutual transcript
+proof still detects a peer that does not possess that descriptor, but it does
+not identify or authorize a person in this open mode. Use **Pause automatic
+pairing** to stop both browser planes or **Rotate public identity** to replace the
+advertised handle. Identity, approval, and policy controls are deferred.
 
-Only one BRSP controller is admitted per pairing session. Treat the pairing link
-as a short-lived secret and stop pairing before leaving a headset unattended.
+The target admits one BRSP controller at a time and automatically offers all nine
+defined Study 6 scopes. Those scopes remain bounded by the typed command allowlist,
+authoritative WebXR revision, application reducer, and live experiment/sensor
+gates; they do not create arbitrary browser or APK access. The companion can
+request status, recenter the panel, apply variant/language/timing setup, select
+and start a pseudonymous participant code, start an admissible block, pause or
+resume media, navigate eligible questionnaire pages, request sensor reconnect or
+return, and explicitly confirm a WebXR-owned abort or APK recorder
+finalize/sensor-export request. It cannot enter names, demographics, consent, or
+questionnaire answers; enter VR; receive an export; run scripts or arbitrary DOM
+input; or delete records. Optional spectator monitoring is separate and off by
+default.
 
-Companion status is privacy-minimized, not anonymous. It includes language,
+The public beacon and BRSP peer live entirely between the WebXR browser on the
+headset and `companion.html` on the phone/PC. The APK never joins the beacon or
+accepts BRSP. WebXR remains the experiment authority and forwards only its
+existing bounded sensor-recorder effects to the APK through `study6.bridge.v2`.
+If the WebXR page closes, remote control ends even though the APK may continue
+recording; the experimental relay and independent controller-to-APK path are not
+production-wired.
+
+Companion status is privacy-minimized, not anonymous. It includes the selected
+variant/language/timing, expected participant-code prefix, completed-block count,
 whether a participant and immersive session are active, phase, block and
 condition code, media timing/paused state, live heart rate, ECG sample
-rate/count/age, and APK/recorder health counters. It excludes participant
-names/IDs, demographics, questionnaire answers, and raw ECG samples. Records
-and prepared sensor exports never traverse the companion channel.
+rate/count/age, and APK/recorder health counters. It excludes participant codes,
+names, demographics, questionnaire answers, and raw ECG samples. Records and
+prepared sensor exports never traverse the companion channel.
 
 ## Data and privacy boundary
 
@@ -136,14 +163,16 @@ can remove the browser study record; clearing APK data can remove the separate
 sensor record.
 
 GitHub Pages still serves the static files and may process ordinary request
-metadata under GitHub's own policies. If an operator explicitly enables the
-companion, the app contacts VDO.Ninja public signaling and STUN/TURN services.
-A direct WebRTC route can disclose peer IP addresses. If optional spectator
-monitoring is explicitly enabled, its image may show participant-entered text.
-BRSP application frames travel inside
-WebRTC's DTLS-protected data channels; the fragment secret is used for mutual
-HMAC proof and VDO.Ninja session protection, not as a separate one-time AES-GCM
-application-message wrapper. This does not remove signaling, endpoint, or
+metadata under GitHub's own policies. While the automatic headset beacon or a
+companion listener is active, the page contacts VDO.Ninja public signaling and
+STUN/TURN services. A direct WebRTC route can disclose peer IP addresses. If
+optional spectator monitoring is explicitly enabled, its image may show
+participant-entered text. BRSP application frames travel inside WebRTC's
+DTLS-protected data channels. In public mode, the HMAC/VDO key is deterministically
+derived from the advertised opaque handle and therefore provides protocol
+transcript integrity, not operator identity or access control. A manually
+supplied private descriptor remains available as a fallback and is scrubbed from
+the URL fragment before networking. None of this removes signaling, endpoint, or
 operator-side privacy risks.
 
 Do not commit exports, participant names/IDs/responses, pairing links, browser

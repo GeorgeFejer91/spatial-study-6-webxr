@@ -16,34 +16,56 @@
         <p class="eyebrow">Operator companion · test-only</p>
         <h1 id="page-title">Spatial Study 6</h1>
         <p class="lede">
-          A volatile data-only WebRTC peer carries BRSP/1 authoritative status and optional scoped
-          commands. Spectator video is a separate monitoring plane and is off by default.
+          This page discovers public Study 6 headsets and opens their data-only BRSP/1 operator
+          channel automatically. Spectator video is a separate monitoring plane and is off by default.
         </p>
       </header>
 
       <section class="pair-card" aria-labelledby="pair-title">
         <div>
-          <h2 id="pair-title">Pair with headset</h2>
-          <p id="pairing-summary">Open the session pairing link shown by the experiment.</p>
+          <h2 id="pair-title">Public headset connection</h2>
+          <p id="pairing-summary">
+            Public discovery starts automatically. The first opaque headset beacon connects without a code.
+          </p>
         </div>
-        <label class="pair-input-label" for="pair-input">Session link or pairing code</label>
+        <div class="public-discovery" aria-labelledby="public-discovery-title">
+          <div class="public-discovery__heading">
+            <h3 id="public-discovery-title">Public beacon</h3>
+            <span id="public-discovery-badge" class="badge">Discovering</span>
+          </div>
+          <p id="public-discovery-state" class="state" role="status">
+            Looking for public Study 6 headsets…
+          </p>
+          <ul id="public-target-list" class="public-target-list" aria-label="Online public Study 6 headsets"></ul>
+        </div>
+        <p class="pairing-convenience">
+          This is an intentionally open prototype: any visitor can derive the same bounded operator
+          session from a listed beacon. Cancel stops automatic reconnection until reload or an explicit Connect.
+          A private link can still be pasted below as a manual override.
+        </p>
+        <label class="pair-input-label" for="pair-input">Optional private session link or pairing code</label>
         <div class="pair-row">
           <input id="pair-input" type="password" autocomplete="off" spellcheck="false" />
-          <button id="apply-pair" class="secondary" type="button">Apply</button>
+          <button id="apply-pair" class="secondary" type="button">Apply / replace</button>
         </div>
         <div class="actions">
           <button id="connect" type="button" disabled>Connect</button>
-          <button id="disconnect" class="secondary" type="button" disabled>Disconnect</button>
+          <button id="disconnect" class="secondary" type="button" disabled>Cancel / disconnect</button>
+          <button id="forget-pairing" class="secondary danger-outline" type="button" disabled>Forget pairing</button>
         </div>
         <p id="connection-state" class="state" role="status">Not paired.</p>
         <details>
           <summary>Privacy and network disclosure</summary>
           <p>
-            Pairing contacts VDO.Ninja’s public signaling and STUN/TURN infrastructure. A direct
+            Discovery and control contact VDO.Ninja’s public signaling and STUN/TURN infrastructure. A direct
             WebRTC route can disclose peer IP addresses. If optional monitoring was explicitly
-            enabled, its spectator image may contain participant-entered text. The link can reconnect one controller at a time while this
-            headset pairing session remains enabled. Use only with an authorized operator and stop
-            pairing before leaving the headset unattended.
+            enabled, its spectator image may contain participant-entered text. The public beacon is
+            not identity authentication: any browser visiting this page can derive the same session
+            key and request the existing bounded Study 6 operator scopes. The target still accepts
+            only typed experiment commands and never sends raw ECG, participant identifiers,
+            demographics, or questionnaire answers. A manually supplied private descriptor may be
+            retained locally until <strong>Forget pairing</strong>; URL fragments are removed before
+            any connection starts.
           </p>
         </details>
       </section>
@@ -73,6 +95,45 @@
             <h2 id="control-title">Operator commands</h2>
           </div>
         </div>
+        <div class="operator-setup" aria-labelledby="setup-controls-title">
+          <h3 id="setup-controls-title">Setup and participant allocation</h3>
+          <div class="operator-setup__fields">
+            <label>
+              Study variant
+              <select id="setup-variant">
+                <option value="DHS">DHS · dynamic hands / static environment</option>
+                <option value="SHD">SHD · static hands / dynamic environment</option>
+              </select>
+            </label>
+            <label>
+              Questionnaire language
+              <select id="setup-language">
+                <option value="en">English</option>
+                <option value="de">Deutsch</option>
+              </select>
+            </label>
+            <label>
+              Timing
+              <select id="setup-timing">
+                <option value="full">Full · 5 minutes</option>
+                <option value="clipped">Clipped · 10 seconds</option>
+              </select>
+            </label>
+          </div>
+          <button id="apply-configuration" type="button" disabled>Apply study setup</button>
+          <div class="participant-start">
+            <label for="participant-id">Participant code <span id="participant-hint">(configure the study first)</span></label>
+            <div class="participant-start__row">
+              <input id="participant-id" type="text" maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+              <button id="start-participant" type="button" disabled>Select and start participant</button>
+            </div>
+          </div>
+          <p class="fine-print">
+            The participant code is sent only as a bounded acknowledged command and is never
+            returned in companion status. Names, demographics, consent, and questionnaire answers
+            must still be entered locally in the headset.
+          </p>
+        </div>
         <div class="command-grid" id="commands">
           <button type="button" data-command="request_status" disabled>Refresh status</button>
           <button type="button" data-command="recenter_panel" disabled>Recenter panel</button>
@@ -92,8 +153,9 @@
           acknowledgements. They are rejected unless the experiment’s reducer
           allows them. WebXR owns questionnaire and condition control; sensor export and recording
           finalization are bounded requests to the APK recorder. Records never traverse this
-          channel. The companion cannot enter participant data, answer
-          questionnaires, grant consent, start immersive VR, or erase local data.
+          channel. The companion can select the pseudonymous participant code, but cannot enter
+          names or demographics, answer questionnaires, grant consent, start immersive VR, or
+          erase local data.
         </p>
         <p id="command-result" class="state" role="status">No command sent.</p>
       </section>
@@ -114,8 +176,11 @@
           <div><dt>Phase</dt><dd data-field="phase">—</dd></div>
           <div><dt>View</dt><dd data-field="route">—</dd></div>
           <div><dt>Language</dt><dd data-field="language">—</dd></div>
+          <div><dt>Variant</dt><dd data-field="variant">—</dd></div>
+          <div><dt>Timing</dt><dd data-field="timing">—</dd></div>
           <div><dt>Immersive session</dt><dd data-field="xr-presenting">—</dd></div>
           <div><dt>Participant state</dt><dd data-field="participant-active">—</dd></div>
+          <div><dt>Completed blocks</dt><dd data-field="completed-blocks">0 / 4</dd></div>
           <div><dt>Block</dt><dd data-field="block">—</dd></div>
           <div><dt>Condition</dt><dd data-field="condition">—</dd></div>
           <div><dt>Media</dt><dd data-field="media">—</dd></div>

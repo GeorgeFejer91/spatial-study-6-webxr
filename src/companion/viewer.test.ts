@@ -5,7 +5,7 @@ import {
   createPairingDescriptor,
   decodePairingDescriptor,
   type CompanionStatus,
-  type RemoteCommandName,
+  type RemoteMutationCommandRequest,
 } from './protocol'
 import { CompanionViewer, type CommandAcknowledgement } from './viewer'
 import type { VdoNinjaSdk, VdoOpenChannelOptions } from './vdo-sdk'
@@ -175,8 +175,12 @@ function makeStatus(revision = 7): CompanionStatus {
     phase: 'stimulus',
     route: 'immersive-vr',
     language: 'en',
+    variant: 'DHS',
+    timingMode: 'full',
+    participantPrefix: 'PH',
     xrPresenting: true,
     participantActive: true,
+    completedBlockCount: 0,
     blockOrdinal: 2,
     condition: 'HC_HE',
     mediaElapsedSeconds: 12,
@@ -205,6 +209,8 @@ function makeStatus(revision = 7): CompanionStatus {
     startPreflightReady: true,
     lastReceiptStage: 'observed',
     remoteControlEnabled: true,
+    remoteConfigureAllowed: false,
+    remoteParticipantStartAllowed: false,
     remoteAdvanceAllowed: false,
     remoteBackAllowed: false,
     remoteStartAllowed: false,
@@ -237,13 +243,13 @@ describe('companion viewer BRSP controller', () => {
     let currentStatus = makeStatus()
     const handleCommand = vi.fn(
       async (
-        name: Exclude<RemoteCommandName, 'request_status'>,
+        request: RemoteMutationCommandRequest,
         expectedRevision: number,
       ) => {
         currentStatus = {
           ...currentStatus,
           revision: expectedRevision + 1,
-          mediaPaused: name === 'pause_media',
+          mediaPaused: request.name === 'pause_media',
         }
         return { accepted: true, code: 'paused', message: 'Media paused.' }
       },
@@ -275,7 +281,7 @@ describe('companion viewer BRSP controller', () => {
         expect(statuses.some(({ revision }) => revision === 7)).toBe(true)
       }, { timeout: 3_000 })
 
-      const commandId = await viewer.sendCommand('pause_media')
+      const commandId = await viewer.sendCommand({ name: 'pause_media', args: {} })
       await vi.waitFor(() => {
         expect(acknowledgements.find((entry) => entry.commandId === commandId)).toMatchObject({
           accepted: true,
@@ -288,7 +294,7 @@ describe('companion viewer BRSP controller', () => {
           && remoteCommandReceiptId === commandId
         ))).toBe(true)
       }, { timeout: 3_000 })
-      expect(handleCommand).toHaveBeenCalledWith('pause_media', 7)
+      expect(handleCommand).toHaveBeenCalledWith({ name: 'pause_media', args: {} }, 7)
     } finally {
       await viewer?.stop()
       await host.stop()

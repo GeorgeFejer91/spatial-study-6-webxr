@@ -14,8 +14,8 @@ Meta Quest Browser / WebXR (sole study authority)
   ├─ study reducer, revision, recovery, and audit trail
   ├─ browser IndexedDB plus study JSON/CSV export
   ├─ 2D/immersive presentation and media control
-  └─ encrypted VDO.Ninja spectator/operator companion
-                         ⇅ study6.bridge.v1
+  └─ public browser beacon + DTLS-protected BRSP operator companion
+                         ⇅ study6.bridge.v2
 Quest Sensor Bridge APK (sensor-recorder provider only)
   ├─ visible setup/readiness Activity
   ├─ connectedDevice foreground service
@@ -67,14 +67,22 @@ bridge.
 - `src/timing/clock-fit.ts` and `src/timing/start-barrier.ts` implement pure,
   deterministic clock-fit and multi-owner barrier state machines. They are not
   production-wired and do not establish physical onset accuracy.
-- `src/companion/*` uses VDO.Ninja's data-only announce/view path by default and
-  carries BRSP/1 on dedicated reliable-control and unordered latest-state
-  RTCDataChannels. Optional spectator monitoring is separate and off by default.
-  BRSP mutually proves the pairing secret, negotiates scopes,
-  revision-fences commands, and returns application-level `applied` receipts.
-  Study commands terminate at the WebXR authority; only sensor reconnect,
+- `src/companion/public-beacon.ts` publishes and receives the fixed,
+  passwordless VDO.Ninja discovery room. It announces only an opaque derived
+  handle. A bare `companion.html` visit selects the first sorted handle and both
+  browsers deterministically derive the same data-only BRSP/VDO descriptor from
+  it; no copied private link is required.
+- The rest of `src/companion/*` carries BRSP/1 on dedicated reliable-control and
+  unordered latest-state RTCDataChannels. Optional spectator monitoring is
+  separate and off by default. BRSP proves possession of the derived descriptor,
+  negotiates the fixed bounded scopes, revision-fences commands, and returns
+  application-level `applied` receipts. Because every visitor can reproduce the
+  public descriptor, this proof is not operator identity or access control in the
+  current prototype.
+- Study commands terminate at the WebXR authority; only sensor reconnect,
   recorder marker/finalize, sensor export, and return effects are forwarded to
-  the APK.
+  the APK. The APK does not advertise, discover, join, or authenticate the public
+  browser beacon.
 - `services/control-relay` is an experimental Rust WSS room-router scaffold. It
   is not wired to WebXR/APK failover and lacks the production role/capability and
   abuse-control proof required for deployment. Do not expose it for participant
@@ -100,7 +108,7 @@ old immersive renderer into the background service:
 The APK accepts only the sensor-recorder command family:
 
 ```text
-request_status, reconnect_sensor, record_experiment_marker,
+request_status, reconnect_sensor, begin_recording, record_experiment_marker,
 finalize_recording, request_sensor_export, return_to_experiment
 ```
 
@@ -116,27 +124,33 @@ the WebXR study authority and is not silently converted into this bridge variant
 
 1. The researcher opens the Sensor Bridge Activity and grants Bluetooth access.
 2. The Activity explicitly starts the `connectedDevice` foreground service.
-3. The service selects/connects the H10, configures 130 Hz PMD ECG, opens the
-   app-private recording, and requires fresh real samples plus a healthy writer.
+3. The service selects/connects the H10, configures 130 Hz PMD ECG, and exposes
+   fresh real samples plus recorder/storage readiness without choosing a study
+   session.
 4. The acquisition card shows HR, sample rate/count/age, a bounded waveform,
    reconnect/gap counters, and recorder/storage state. **Launch experiment**
    remains gated.
-5. The APK generates a fresh per-process 256-bit bridge token and launches the exact allowlisted
-   HTTPS WebXR URL in Meta Browser.
+5. The APK generates a fresh per-process 256-bit bridge token plus a nonsecret
+   launch nonce and launches the exact allowlisted HTTPS WebXR URL in Meta
+   Browser. The token remains fragment-only and is scrubbed after bootstrap.
 6. WebXR opens/reconciles its own IndexedDB study record, authenticates to the
    sensor provider, and renders the questionnaire/condition flow from its local
-   authoritative state.
+   authoritative state. After a participant session is durably allocated or
+   recovered, WebXR issues one stable `begin_recording` request and waits for a
+   snapshot whose envelope session and `ownerSessionId` match before accepting
+   demographics or acquisition markers.
 7. Every participant or remote study action is validated, reduced, audited, and
    persisted by WebXR. The APK neither accepts that action as a reducer command nor
    advances a study page.
 8. At acquisition-relevant boundaries WebXR sends a timestamped metadata marker.
    The APK durably appends it beside the continuous ECG and returns a recorder
    receipt/snapshot without changing study state.
-9. The researcher may explicitly enable the VDO.Ninja companion and separately
-   allow remote commands. BRSP/1 admits one mutually authenticated phone/PC
-   controller, publishes privacy-minimized WebXR state, and sends scoped commands
-   to WebXR. WebXR alone decides and applies progression; sensor requests go
-   through WebXR to the APK.
+9. On page startup WebXR automatically enables the full bounded operator profile,
+   starts its data-only BRSP target, and publishes an opaque availability handle.
+   Visiting bare `companion.html` on a phone/PC starts discovery, deterministically
+   selects the first online handle, derives the public descriptor, and connects
+   without a headset prompt. One controller is admitted at a time. WebXR alone
+   decides and applies progression; sensor requests go through WebXR to the APK.
 10. WebXR finalizes/exports the browser study record. The APK separately
     finalizes/exports the sensor artifact. Neither export is transported through
     VDO.Ninja or the experimental relay.
@@ -182,8 +196,8 @@ tolerance is declared.
   commit `62ff66c6df724847c1e54161feabb470b67b1192`. The release also ships
   `brsp-provenance.json` with the exact source blob and normalized SHA-256.
 - **Why it matters:** it provides a transport-neutral one-controller/one-target
-  state machine for mutual pairing proof, capability/scope negotiation, semantic
-  commands, applied receipts, snapshots, and latest-state telemetry.
+  state machine for descriptor-possession proof, capability/scope negotiation,
+  semantic commands, applied receipts, snapshots, and latest-state telemetry.
 - **Lesson borrowed:** WebXR is the target/authority; phone or PC is the
   controller; reliable control is distinct from replaceable state; transport
   delivery is not application effect; state is always target-authoritative.
@@ -195,6 +209,12 @@ tolerance is declared.
 - **Target layer:** the exact MIT core is vendored behind the Study 6 Zod profile
   and a same-peer VDO custom-channel adapter. Questionnaire/condition authority
   remains in the WebXR reducer; BLE/ECG durability remains in the APK.
+- **Public prototype layer:** `public-beacon.ts` provides discovery only, then
+  domain-separated SHA-256 derivations map the opaque handle to one reproducible
+  BRSP key and VDO room/stream tuple. There is intentionally no identity,
+  allowlist, approval, or per-operator authorization in this phase. The direct
+  QR/link and manual descriptor input remain fallback paths rather than required
+  setup.
 - **Validation/follow-up:** host conformance covers HMAC, envelopes, scopes,
   two-channel semantics, strict status parsing, and revisions. Physical Quest,
   Android/iOS phone, desktop, direct/TURN, sleep/wake, and network-migration
@@ -203,16 +223,25 @@ tolerance is declared.
 The companion's bounded study command surface is:
 
 ```text
-request_status, recenter_panel, start_block, pause_media, resume_media,
-advance, back, abort_session, finalize_session, reconnect_sensor,
-return_to_experiment, request_export
+configure_study, start_participant, request_status, recenter_panel, start_block,
+pause_media, resume_media, advance, back, abort_session, finalize_session,
+reconnect_sensor, return_to_experiment, request_export
 ```
 
-These commands target the active WebXR coordinator. BRSP/1 validates a mutual
-HMAC proof of the 256-bit pairing secret and negotiates the exact Study 6 scopes.
-WebXR additionally validates the local control opt-in, exact scope/action pair,
-and experiment revision. It owns all questionnaire, condition, block, abort, and
-study-finalization decisions and maps only relevant recorder effects to the
+`configure_study` carries exactly the variant, questionnaire language, and
+timing mode. `start_participant` carries one bounded pseudonymous participant
+code. Neither command can carry demographics, consent, questionnaire answers,
+selectors, DOM events, scripts, URLs, or arbitrary method names, and companion
+status never echoes the participant code.
+
+These commands target the active WebXR coordinator. In the public mode, BRSP/1
+validates a mutual HMAC proof over the reproducible descriptor and negotiates all
+nine defined Study 6 scopes. That proof protects the protocol transcript against
+an unrelated peer but does not authenticate an operator because every public
+visitor can derive the same key. The target still validates the exact
+scope/action pair, bounded arguments, experiment revision, reducer transition,
+and live acquisition gates. It owns all questionnaire, condition, block, abort,
+and study-finalization decisions and maps only relevant recorder effects to the
 smaller APK command family. APK recorder revisions remain result telemetry and
 never replace the WebXR experiment revision.
 
@@ -232,7 +261,8 @@ Likewise, a BRSP `start_block` receipt proves WebXR command application, not
 audio/ECG onset; the future local `T0` barrier remains the timing authority.
 
 **Current gap:** the VDO.Ninja path requires the WebXR page to remain connected.
-The Rust relay scaffold is not production-wired, and independent
+The public beacon is intentionally open and does not yet provide identity or
+access control. The Rust relay scaffold is not production-wired, and independent
 controller-to-APK reachability is not implemented.
 
 ## Acceptance boundary

@@ -11,7 +11,9 @@ import type {
   CompanionStatus,
   PairingDescriptor,
   RemoteCommandName,
+  RemoteCommandRequest,
 } from './protocol.ts'
+import { RemoteCommandRequestSchema } from './protocol.ts'
 import {
   BRSPConnection,
   BRSP_STALE_MS,
@@ -95,6 +97,7 @@ export class CompanionViewer extends EventTarget {
       commandGateBlocked:
         !this.hasFreshStatus
         || this.stateStale
+        || [...this.pendingCommands.values()].some(({ timedOut }) => !timedOut)
         || this.awaitingStatusCommandId !== null
         || this.outcomeUnknown,
     }
@@ -154,7 +157,9 @@ export class CompanionViewer extends EventTarget {
     await this.disconnect()
   }
 
-  async sendCommand(name: RemoteCommandName): Promise<string> {
+  async sendCommand(requestValue: RemoteCommandRequest): Promise<string> {
+    const request = RemoteCommandRequestSchema.parse(requestValue)
+    const name = request.name
     const connection = this.brsp
     if (!connection || connection.phase !== 'ready') {
       throw new Error('The authenticated BRSP control channel is not ready.')
@@ -171,8 +176,14 @@ export class CompanionViewer extends EventTarget {
     if (name !== 'request_status' && this.outcomeUnknown) {
       throw new Error('A previous command outcome is unknown; refresh authoritative status first.')
     }
+    if (
+      name !== 'request_status'
+      && [...this.pendingCommands.values()].some(({ timedOut }) => !timedOut)
+    ) {
+      throw new Error('Waiting for the previous command acknowledgement.')
+    }
     const route = remoteCommandToBrsp(name)
-    const commandId = connection.sendCommand(route.scope, route.action, {}, {
+    const commandId = connection.sendCommand(route.scope, route.action, request.args, {
       expectedRevision: this.latestRevision,
     })
     const timer = window.setTimeout(() => {
@@ -189,6 +200,7 @@ export class CompanionViewer extends EventTarget {
       this.emitState()
     }, 8_000)
     this.pendingCommands.set(commandId, { name, timer, timedOut: false })
+    this.emitState()
     return Promise.resolve(commandId)
   }
 

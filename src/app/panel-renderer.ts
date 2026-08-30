@@ -105,6 +105,7 @@ export interface StudyPanelRenderContext {
   localMessage: string
   storageHealthy: boolean
   polar?: PolarStatusProjection
+  recordingSessionReady?: boolean
   startPreflightReady?: boolean
 }
 
@@ -171,7 +172,11 @@ export class StudyPanelRenderer {
         this.renderParticipant(state, context.participantProgress)
         break
       case 'demographics':
-        this.renderDemographics(language, context.polar ?? disconnectedPolarStatus())
+        this.renderDemographics(
+          language,
+          context.polar ?? disconnectedPolarStatus(),
+          context.recordingSessionReady ?? false,
+        )
         break
       case 'block_ready':
         this.renderBlockReady(state, language, context.startPreflightReady ?? true)
@@ -410,12 +415,17 @@ export class StudyPanelRenderer {
     this.panel.replaceBody(body)
   }
 
-  private renderDemographics(language: LanguageCode, polar: PolarStatusProjection): void {
+  private renderDemographics(
+    language: LanguageCode,
+    polar: PolarStatusProjection,
+    recordingSessionReady: boolean,
+  ): void {
     let refreshValidity = () => undefined
     const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 0 })
     body.name = 'study6-demographics'
 
-    const ready = polarProjectionIsReady(polar)
+    const polarReady = polarProjectionIsReady(polar)
+    const ready = polarReady && recordingSessionReady
     const statusColor = ready
       ? STUDY_UI_COLORS.success
       : polar.phase === 'fault'
@@ -450,7 +460,7 @@ export class StudyPanelRenderer {
       }),
       new Text({
         flexGrow: 1,
-        text: this.polarStatusText(language, polar, ready),
+        text: this.polarStatusText(language, polar, polarReady, recordingSessionReady),
         color: STUDY_UI_COLORS.text,
         fontSize: 14,
         fontWeight: 'bold',
@@ -615,7 +625,7 @@ export class StudyPanelRenderer {
         width: 528,
         changed: (value) => {
           this.demographics.handedness = value
-          this.renderDemographics(language, polar)
+          this.renderDemographics(language, polar, recordingSessionReady)
         },
       }),
       compactChoices({
@@ -626,7 +636,7 @@ export class StudyPanelRenderer {
         width: 528,
         changed: (value) => {
           this.demographics.gender = value
-          this.renderDemographics(language, polar)
+          this.renderDemographics(language, polar, recordingSessionReady)
         },
       }),
     )
@@ -659,7 +669,7 @@ export class StudyPanelRenderer {
       pointerEvents: 'auto',
       onClick: () => {
         this.demographics.consentConfirmed = !this.demographics.consentConfirmed
-        this.renderDemographics(language, polar)
+        this.renderDemographics(language, polar, recordingSessionReady)
       },
     })
     consent.name = 'study6-demographics-consent'
@@ -739,9 +749,15 @@ export class StudyPanelRenderer {
     refreshValidity = () => {
       const candidate = this.demographicsValue()
       const invalid = candidate === null || validateDemographics(candidate).length > 0
-      begin.setDisabled(invalid)
+      begin.setDisabled(invalid || !ready)
       validation.setProperties({
-        text: invalid ? studyText(language, 'validation.demographics') : '',
+        text: !ready
+          ? language === 'de'
+            ? 'Warte auf sitzungseigene ECG-Aufzeichnung.'
+            : 'Waiting for this session-owned ECG recording.'
+          : invalid
+            ? studyText(language, 'validation.demographics')
+            : '',
       })
     }
     refreshValidity()
@@ -755,13 +771,19 @@ export class StudyPanelRenderer {
   private polarStatusText(
     language: LanguageCode,
     polar: PolarStatusProjection,
-    ready: boolean,
+    polarReady: boolean,
+    recordingSessionReady: boolean,
   ): string {
-    if (ready) {
+    if (polarReady && recordingSessionReady) {
       const hr = polar.heartRateBpm ?? 0
       return language === 'de'
         ? `Polar H10 ECG bereit\nHF ${hr} | ${polar.ecgSampleRateHz} Hz | ${polar.ecgSampleCount} Samples`
         : `Polar H10 ECG ready\nHR ${hr} | ${polar.ecgSampleRateHz} Hz | ${polar.ecgSampleCount} samples`
+    }
+    if (polarReady) {
+      return language === 'de'
+        ? 'Polar H10 ECG bereit\nWarte auf sitzungseigene Aufzeichnung'
+        : 'Polar H10 ECG ready\nWaiting for session-owned recording'
     }
     const reason = (polar.readinessReason.trim() || polar.phase.replaceAll('_', ' ')).slice(0, 72)
     return language === 'de' ? `Polar H10\nNicht bereit | ${reason}` : `Polar H10\nNot ready | ${reason}`
@@ -842,6 +864,7 @@ export class StudyPanelRenderer {
     const start = createSpatialButton({
       label: studyText(language, 'button.begin_assessment'),
       width: 400,
+      disabled: !startPreflightReady,
       onActivate: () => this.actions.startBlock(),
     }).root
     start.name = 'study6-block-start'
@@ -873,8 +896,8 @@ export class StudyPanelRenderer {
         : [
             paragraph(
               language === 'de'
-                ? 'ECG ist nicht bereit. Die Aufzeichnung darf fortgesetzt werden, bleibt aber als nicht ECG-qualifiziert markiert.'
-                : 'ECG is not ready. Recording may continue, but this block remains marked as not ECG-qualified.',
+                ? 'ECG ist nicht bereit. Der Blockstart bleibt gesperrt, bis Live-130-Hz-ECG und der dauerhafte Schreiber bereit sind.'
+                : 'ECG is not ready. Block start stays locked until live 130 Hz ECG and its durable writer are ready.',
               { size: 18, color: STUDY_UI_COLORS.warning },
             ),
           ]),

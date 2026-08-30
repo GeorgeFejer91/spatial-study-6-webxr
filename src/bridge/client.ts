@@ -1,8 +1,10 @@
 import {
   bridgeReceiptStageIndex,
   disconnectedPolarStatus,
+  missingRequiredApkBridgeCapabilities,
   parseBridgeInboundEnvelope,
   parseBridgeExperimentMarker,
+  parseBridgeOutboundEnvelope,
   PLACEHOLDER_STIMULUS_MODE,
   polarProjectionFromSnapshot,
   polarProjectionFromStatus,
@@ -12,7 +14,6 @@ import {
   type BridgeEnvelope,
   type BridgeErrorPayload,
   type BridgeExperimentMarker,
-  type BridgeHelloPayload,
   type BridgeInboundEnvelope,
   type BridgeSensorAction,
   type BridgeOutboundEnvelope,
@@ -20,6 +21,7 @@ import {
   type BridgeReceiptStage,
   type BridgeSnapshotPayload,
   type PolarStatusProjection,
+  type WebXrBridgeHelloPayload,
 } from './contract.ts'
 import {
   resolveStudyBridgeLaunchConfig,
@@ -66,12 +68,17 @@ interface PendingCommand {
 
 export interface StudyBridgeClientOptions {
   transport: StudyBridgeTransport
+  bridgeLaunch?: string
   browserPageEpoch?: string
   browserInstanceId?: string
   buildId?: string
   commandTimeoutMs?: number
+  handshakeTimeoutMs?: number
+  reconnectDelaysMs?: readonly number[]
   createId?: () => string
 }
+
+const DEFAULT_RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000] as const
 
 function createId(): string {
   return crypto.randomUUID()
@@ -90,8 +97,11 @@ function cloneProjection(projection: StudyBridgeProjection): StudyBridgeProjecti
 export class StudyBridgeClient {
   private readonly transport: StudyBridgeTransport
   private readonly browserInstanceId: string
+  private readonly bridgeLaunch: string
   private readonly buildId: string
   private readonly commandTimeoutMs: number
+  private readonly handshakeTimeoutMs: number
+  private readonly reconnectDelaysMs: readonly number[]
   private readonly createId: () => string
   private readonly listeners = new Set<(projection: StudyBridgeProjection) => void>()
   private readonly pending = new Map<string, PendingCommand>()
@@ -100,14 +110,45 @@ export class StudyBridgeClient {
   private projection: StudyBridgeProjection
   private polarFreshnessTimer: ReturnType<typeof setTimeout> | null = null
   private polarFreshnessGeneration = 0
+  private handshakeTimer: ReturnType<typeof setTimeout> | null = null
+  private handshakeGeneration = 0
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private reconnectAttempt = 0
+  private reconnectGeneration = 0
+  private lifecycleGeneration = 0
+  private connectOperation: Promise<void> | null = null
+  private connectionDesired = false
+  private stopped = false
+  private helloAccepted = false
   private handshakeComplete = false
 
   constructor(options: StudyBridgeClientOptions) {
     this.transport = options.transport
     this.createId = options.createId ?? createId
     this.browserInstanceId = options.browserInstanceId ?? this.createId()
+    this.bridgeLaunch = options.bridgeLaunch ?? 'standalone-webxr-launch'
+    if (!/^[A-Za-z0-9_-]{16,96}$/u.test(this.bridgeLaunch)) {
+      throw new Error('bridgeLaunch must be 16 to 96 base64url characters.')
+    }
     this.buildId = options.buildId ?? 'webxr-placeholder-rehearsal'
     this.commandTimeoutMs = options.commandTimeoutMs ?? 10_000
+    this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 5_000
+    if (
+      !Number.isSafeInteger(this.handshakeTimeoutMs) ||
+      this.handshakeTimeoutMs < 1 ||
+      this.handshakeTimeoutMs > 60_000
+    ) {
+      throw new Error('handshakeTimeoutMs must be from 1 through 60000 milliseconds.')
+    }
+    this.reconnectDelaysMs = options.reconnectDelaysMs ?? DEFAULT_RECONNECT_DELAYS_MS
+    if (
+      this.reconnectDelaysMs.length === 0 ||
+      this.reconnectDelaysMs.some(
+        (delay) => !Number.isSafeInteger(delay) || delay < 0 || delay > 60_000,
+      )
+    ) {
+      throw new Error('reconnectDelaysMs must contain delays from 0 through 60000 milliseconds.')
+    }
     this.projection = {
       connection: this.transport.state,
       connectionDetail: 'Sensor bridge has not connected.',
@@ -128,22 +169,29 @@ export class StudyBridgeClient {
         this.receive(event.value)
         return
       }
+      const unavailable = event.state === 'closed' || event.state === 'fault'
       this.projection = {
         ...this.projection,
         connection: event.state,
         connectionDetail: event.detail,
         sensorConnected: event.state === 'open' && this.handshakeComplete,
-        polar:
-          event.state === 'closed' || event.state === 'fault'
-            ? disconnectedPolarStatus(event.detail)
-            : this.projection.polar,
+        ...(unavailable
+          ? {
+              awaitingSnapshotRevision: null,
+              snapshot: null,
+              polar: disconnectedPolarStatus(event.detail),
+            }
+          : {}),
       }
-      if (event.state === 'closed' || event.state === 'fault') {
+      if (unavailable) {
+        this.helloAccepted = false
         this.handshakeComplete = false
+        this.clearHandshakeTimer()
         this.clearPolarFreshnessTimer()
         this.rejectPending(new Error(event.detail))
       }
       this.emit()
+      if (unavailable) this.scheduleReconnect(event.detail)
     })
   }
 
@@ -158,39 +206,70 @@ export class StudyBridgeClient {
   }
 
   async connect(): Promise<void> {
-    await this.transport.connect()
-    const helloPayload: BridgeHelloPayload = {
+    if (this.stopped) throw new Error('Sensor bridge client is closed.')
+    this.connectionDesired = true
+    if (this.transport.state === 'open' || this.handshakeComplete) return
+    await this.startTransportAttempt(false)
+  }
+
+  private sendHello(): void {
+    const helloPayload: WebXrBridgeHelloPayload = {
       schemaRevision: STUDY_BRIDGE_SCHEMA_REVISION,
       buildId: this.buildId,
       capabilities: [
         'webxr_experiment_authority',
         'polar_status_projection',
         'experiment_metadata_markers',
+        'begin_recording',
+        'session_owned_recording',
+        'durable_markers',
         PLACEHOLDER_STIMULUS_MODE,
       ],
       authority: 'webxr_experiment_owner',
+      bridgeLaunch: this.bridgeLaunch,
     }
-    this.transport.send(this.envelope('hello', 'apk', helloPayload))
+    this.transport.send(parseBridgeOutboundEnvelope(this.envelope('hello', 'apk', helloPayload)))
   }
 
   applySensorAction(
-    action: Exclude<BridgeSensorAction, 'record_experiment_marker'>,
+    action: Exclude<BridgeSensorAction, 'begin_recording' | 'record_experiment_marker'>,
     targetStage: BridgeReceiptStage = 'persisted',
   ): Promise<BridgeCommandResult> {
     return this.command({ action }, targetStage)
+  }
+
+  beginRecording(
+    sessionId: string,
+    webxrRevision: number,
+    recordingRequestId: string,
+    targetStage: BridgeReceiptStage = 'observed',
+  ): Promise<BridgeCommandResult> {
+    return this.command(
+      { action: 'begin_recording', sessionId, webxrRevision, recordingRequestId },
+      targetStage,
+      sessionId,
+    )
   }
 
   recordExperimentMarker(
     marker: BridgeExperimentMarker,
     targetStage: BridgeReceiptStage = 'persisted',
   ): Promise<BridgeCommandResult> {
+    const parsedMarker = parseBridgeExperimentMarker(marker)
     return this.command(
-      { action: 'record_experiment_marker', marker: parseBridgeExperimentMarker(marker) },
+      { action: 'record_experiment_marker', marker: parsedMarker },
       targetStage,
+      parsedMarker.sessionId ?? null,
     )
   }
 
   close(): void {
+    if (this.stopped) return
+    this.stopped = true
+    this.connectionDesired = false
+    this.lifecycleGeneration += 1
+    this.clearReconnectTimer()
+    this.clearHandshakeTimer()
     this.clearPolarFreshnessTimer()
     this.rejectPending(new Error('Sensor bridge client closed.'))
     this.unsubscribeTransport()
@@ -201,8 +280,11 @@ export class StudyBridgeClient {
   private command(
     payload: BridgeCommandPayload,
     targetStage: BridgeReceiptStage,
+    sessionIdOverride?: string | null,
   ): Promise<BridgeCommandResult> {
-    const next = this.commandOperation.then(() => this.issueCommand(payload, targetStage))
+    const next = this.commandOperation.then(() =>
+      this.issueCommand(payload, targetStage, sessionIdOverride),
+    )
     this.commandOperation = next.catch(() => undefined)
     return next
   }
@@ -210,6 +292,7 @@ export class StudyBridgeClient {
   private issueCommand(
     payload: BridgeCommandPayload,
     targetStage: BridgeReceiptStage,
+    sessionIdOverride?: string | null,
   ): Promise<BridgeCommandResult> {
     if (!this.projection.sensorConnected || !this.projection.bridgeProcessEpoch) {
       return Promise.reject(new Error('APK sensor recorder is not connected.'))
@@ -225,6 +308,7 @@ export class StudyBridgeClient {
     const envelope = this.envelope('command', 'apk', payload, {
       messageId: commandId,
       expectedRevision: this.projection.revision,
+      sessionId: sessionIdOverride,
     })
     const promise = new Promise<BridgeCommandResult>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -247,7 +331,7 @@ export class StudyBridgeClient {
       })
     })
     try {
-      this.transport.send(envelope)
+      this.transport.send(parseBridgeOutboundEnvelope(envelope))
     } catch (error) {
       const pending = this.pending.get(commandId)
       if (pending) {
@@ -260,6 +344,7 @@ export class StudyBridgeClient {
   }
 
   private receive(value: unknown): void {
+    if (this.transport.state !== 'open') return
     let message: BridgeInboundEnvelope
     try {
       message = parseBridgeInboundEnvelope(value)
@@ -312,10 +397,18 @@ export class StudyBridgeClient {
         lastReceipt: null,
       }
     }
-    if (!this.handshakeComplete && message.type !== 'hello') {
+    if (!this.helloAccepted && message.type !== 'hello') {
       this.projection = {
         ...this.projection,
         connectionDetail: 'Ignored APK data received before the sensor-provider hello.',
+      }
+      this.emit()
+      return
+    }
+    if (!this.handshakeComplete && message.type !== 'hello' && message.type !== 'snapshot') {
+      this.projection = {
+        ...this.projection,
+        connectionDetail: 'Ignored APK data received before the fresh canonical snapshot.',
       }
       this.emit()
       return
@@ -329,20 +422,43 @@ export class StudyBridgeClient {
         this.emit()
         return
       }
-      this.handshakeComplete = true
+      const missingCapabilities = missingRequiredApkBridgeCapabilities(
+        message.payload.capabilities,
+      )
+      if (missingCapabilities.length > 0) {
+        this.helloAccepted = false
+        this.handshakeComplete = false
+        this.projection = {
+          ...this.projection,
+          sensorConnected: false,
+          connectionDetail: `Rejected APK hello missing required capabilities: ${missingCapabilities.join(', ')}.`,
+        }
+        this.emit()
+        return
+      }
+      this.helloAccepted = true
+      this.handshakeComplete = false
+      this.projection = {
+        ...this.projection,
+        sensorConnected: false,
+        bridgeProcessEpoch: message.bridgeProcessEpoch,
+        sessionId: message.sessionId ?? this.projection.sessionId,
+        connectionDetail: 'APK hello accepted; awaiting a fresh canonical recorder snapshot.',
+      }
+      this.emit()
+      return
     }
     this.projection = {
       ...this.projection,
       sensorConnected: this.handshakeComplete,
       bridgeProcessEpoch: message.bridgeProcessEpoch,
       sessionId: message.sessionId ?? this.projection.sessionId,
-      connectionDetail: 'APK sensor recorder connected.',
+      connectionDetail: this.handshakeComplete
+        ? 'APK sensor recorder connected.'
+        : 'APK hello accepted; awaiting a fresh canonical recorder snapshot.',
     }
 
     switch (message.type) {
-      case 'hello':
-        this.emit()
-        return
       case 'snapshot':
         this.receiveSnapshot(message)
         return
@@ -376,10 +492,16 @@ export class StudyBridgeClient {
       return
     }
     const polar = polarProjectionFromSnapshot(message.payload)
+    this.handshakeComplete = true
     this.projection = {
       ...this.projection,
+      sensorConnected: this.transport.state === 'open',
+      connectionDetail: 'APK sensor recorder connected.',
       revision: message.revision,
-      sessionId: message.sessionId ?? this.projection.sessionId,
+      sessionId:
+        message.sessionId ??
+        message.payload.recording.ownerSessionId ??
+        this.projection.sessionId,
       snapshot: message.payload,
       polar,
       lastError: null,
@@ -389,6 +511,9 @@ export class StudyBridgeClient {
           ? this.projection.awaitingSnapshotRevision
           : null,
     }
+    this.reconnectAttempt = 0
+    this.clearReconnectTimer()
+    this.clearHandshakeTimer()
     this.schedulePolarFreshnessDowngrade(polar)
     this.resolveSnapshotBoundCommands(message.revision)
     this.emit()
@@ -456,8 +581,14 @@ export class StudyBridgeClient {
     type: TType,
     target: 'apk',
     payload: TPayload,
-    overrides: { messageId?: string; expectedRevision?: number } = {},
+    overrides: {
+      messageId?: string
+      expectedRevision?: number
+      sessionId?: string | null
+    } = {},
   ): Extract<BridgeOutboundEnvelope, { type: TType }> {
+    const sessionId =
+      'sessionId' in overrides ? overrides.sessionId : this.projection.sessionId
     return {
       protocol: STUDY_BRIDGE_PROTOCOL,
       bridgeProcessEpoch: this.projection.bridgeProcessEpoch ?? 'unbound',
@@ -465,7 +596,7 @@ export class StudyBridgeClient {
       transportEpoch: this.projection.transportEpoch,
       revision: this.projection.revision,
       messageId: overrides.messageId ?? this.createId(),
-      ...(this.projection.sessionId === null ? {} : { sessionId: this.projection.sessionId }),
+      ...(sessionId == null ? {} : { sessionId }),
       ...(overrides.expectedRevision === undefined
         ? {}
         : { expectedRevision: overrides.expectedRevision }),
@@ -526,6 +657,123 @@ export class StudyBridgeClient {
     this.polarFreshnessTimer = null
   }
 
+  private scheduleHandshakeDeadline(): void {
+    this.clearHandshakeTimer()
+    const generation = this.handshakeGeneration
+    const lifecycleGeneration = this.lifecycleGeneration
+    this.handshakeTimer = setTimeout(() => {
+      if (
+        this.stopped ||
+        this.handshakeComplete ||
+        generation !== this.handshakeGeneration ||
+        lifecycleGeneration !== this.lifecycleGeneration
+      ) {
+        return
+      }
+      this.handshakeTimer = null
+      this.projection = {
+        ...this.projection,
+        sensorConnected: false,
+        connectionDetail:
+          'APK bridge handshake timed out before a fresh hello and canonical snapshot.',
+      }
+      this.emit()
+      this.transport.close(4000, 'APK hello/snapshot handshake timed out')
+    }, this.handshakeTimeoutMs)
+  }
+
+  private clearHandshakeTimer(): void {
+    this.handshakeGeneration += 1
+    if (this.handshakeTimer !== null) clearTimeout(this.handshakeTimer)
+    this.handshakeTimer = null
+  }
+
+  private startTransportAttempt(reconnecting: boolean): Promise<void> {
+    if (this.stopped) return Promise.reject(new Error('Sensor bridge client is closed.'))
+    if (this.connectOperation) return this.connectOperation
+
+    const lifecycleGeneration = this.lifecycleGeneration
+    if (reconnecting) {
+      this.helloAccepted = false
+      this.handshakeComplete = false
+      this.projection = {
+        ...this.projection,
+        sensorConnected: false,
+        sessionId: null,
+        bridgeProcessEpoch: null,
+        transportEpoch: this.createId(),
+        revision: 0,
+        awaitingSnapshotRevision: null,
+        snapshot: null,
+        polar: disconnectedPolarStatus('Reconnecting to the APK sensor recorder.'),
+        lastReceipt: null,
+        lastError: null,
+      }
+      this.emit()
+    }
+
+    const operation = (async () => {
+      try {
+        await this.transport.connect()
+        if (this.stopped || lifecycleGeneration !== this.lifecycleGeneration) return
+        this.sendHello()
+        this.scheduleHandshakeDeadline()
+      } catch (error) {
+        if (!this.stopped && lifecycleGeneration === this.lifecycleGeneration) {
+          this.scheduleReconnect(error instanceof Error ? error.message : String(error))
+        }
+        throw error
+      }
+    })()
+    this.connectOperation = operation
+    void operation.then(
+      () => {
+        if (this.connectOperation === operation) this.connectOperation = null
+      },
+      () => {
+        if (this.connectOperation === operation) this.connectOperation = null
+      },
+    )
+    return operation
+  }
+
+  private scheduleReconnect(detail: string): void {
+    if (
+      this.stopped ||
+      !this.connectionDesired ||
+      this.reconnectTimer !== null
+    ) {
+      return
+    }
+    const delayIndex = Math.min(this.reconnectAttempt, this.reconnectDelaysMs.length - 1)
+    const delayMs = this.reconnectDelaysMs[delayIndex]!
+    this.reconnectAttempt += 1
+    const generation = ++this.reconnectGeneration
+    const lifecycleGeneration = this.lifecycleGeneration
+    this.projection = {
+      ...this.projection,
+      connectionDetail: `${detail} Reconnecting to the local sensor bridge in ${delayMs} ms.`,
+    }
+    this.emit()
+    this.reconnectTimer = setTimeout(() => {
+      if (
+        this.stopped ||
+        generation !== this.reconnectGeneration ||
+        lifecycleGeneration !== this.lifecycleGeneration
+      ) {
+        return
+      }
+      this.reconnectTimer = null
+      void this.startTransportAttempt(true).catch(() => undefined)
+    }, delayMs)
+  }
+
+  private clearReconnectTimer(): void {
+    this.reconnectGeneration += 1
+    if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+  }
+
   private emit(): void {
     const projection = this.snapshot()
     this.listeners.forEach((listener) => listener(projection))
@@ -533,19 +781,26 @@ export class StudyBridgeClient {
 }
 
 export function createDefaultStudyBridgeClient(): StudyBridgeClient {
-  const launch = resolveStudyBridgeLaunchConfig(window.location)
-  if (launch.fromFragment) {
-    const fragment = new URLSearchParams(window.location.hash.replace(/^#/u, ''))
-    fragment.delete('bridgeWs')
-    fragment.delete('bridgeToken')
-    const suffix = fragment.size > 0 ? `#${fragment.toString()}` : ''
-    window.history.replaceState(
-      window.history.state,
-      '',
-      `${window.location.pathname}${window.location.search}${suffix}`,
-    )
-  }
+  const fragment = new URLSearchParams(window.location.hash.replace(/^#/u, ''))
+  const hasFragmentLaunchMaterial = fragment.has('bridgeWs') || fragment.has('bridgeToken')
+  const launch = (() => {
+    try {
+      return resolveStudyBridgeLaunchConfig(window.location)
+    } finally {
+      if (hasFragmentLaunchMaterial) {
+        fragment.delete('bridgeWs')
+        fragment.delete('bridgeToken')
+        const suffix = fragment.size > 0 ? `#${fragment.toString()}` : ''
+        window.history.replaceState(
+          window.history.state,
+          '',
+          `${window.location.pathname}${window.location.search}${suffix}`,
+        )
+      }
+    }
+  })()
   return new StudyBridgeClient({
     transport: new WebSocketStudyBridgeTransport({ url: launch.url }),
+    bridgeLaunch: launch.bridgeLaunch ?? 'standalone-webxr-launch',
   })
 }

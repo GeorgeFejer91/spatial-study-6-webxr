@@ -12,6 +12,7 @@ import type { ExperimentState } from "./types"
 function command(
   state: ExperimentState,
   operation: RemoteCommand["command"],
+  args: unknown = {},
 ): RemoteCommand {
   return {
     protocol: "spatial.study6.companion.command.v1",
@@ -20,6 +21,7 @@ function command(
     issued_at_unix_ms: 1_788_034_400_000,
     expected_revision: state.revision,
     command: operation,
+    args,
   }
 }
 
@@ -38,7 +40,7 @@ describe("bounded companion commands", () => {
       parseRemoteCommandJson(
         JSON.stringify({ ...command(state, "request_status"), command: "set_answer" }),
       ),
-    ).toMatchObject({ accepted: false, code: "unknown_command" })
+    ).toMatchObject({ accepted: false, code: "invalid_command_request" })
   })
 
   it("requires fresh revisions and local enablement for mutations", () => {
@@ -90,6 +92,55 @@ describe("bounded companion commands", () => {
       accepted: false,
       code: "export_not_allowed",
     })
+  })
+
+  it("permits bounded operator setup and participant selection only in their owning phases", () => {
+    let state = createInitialExperimentState()
+    const setup = command(state, "configure_study", {
+      variantId: "SHD",
+      languageCode: "de",
+      timingMode: "clipped",
+    })
+    expect(guardRemoteCommand(state, setup, true)).toEqual({
+      accepted: true,
+      intent: {
+        type: "configure_study",
+        configuration: {
+          variantId: "SHD",
+          languageCode: "de",
+          timingMode: "clipped",
+        },
+      },
+    })
+    expect(guardRemoteCommand(state, command(state, "configure_study", {
+      variantId: "SHD",
+      languageCode: "de",
+      timingMode: "clipped",
+      selector: "#submit",
+    }), true)).toMatchObject({ accepted: false, code: "invalid_command_request" })
+
+    const configured = reduceStudy(state, {
+      type: "configure",
+      configuration: setup.args as never,
+    })
+    if (!configured.accepted) throw new Error(configured.detail)
+    state = configured.state
+    expect(guardRemoteCommand(
+      state,
+      command(state, "start_participant", { participantId: "PI7" }),
+      true,
+    )).toEqual({
+      accepted: true,
+      intent: { type: "start_participant", participantId: "PI7" },
+    })
+    expect(guardRemoteCommand(
+      state,
+      command(state, "start_participant", {
+        participantId: "PI7",
+        demographics: { firstName: "not allowed" },
+      }),
+      true,
+    )).toMatchObject({ accepted: false, code: "invalid_command_request" })
   })
 
   it("admits sensor recovery but leaves effect authority to the APK", () => {

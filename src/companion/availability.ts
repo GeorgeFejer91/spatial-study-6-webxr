@@ -16,6 +16,10 @@ export function companionCommandAllowed(
   if (!status.remoteControlEnabled) return false
 
   switch (name) {
+    case 'configure_study':
+      return status.remoteConfigureAllowed
+    case 'start_participant':
+      return status.remoteParticipantStartAllowed
     case 'start_block':
       return status.remoteStartAllowed
     case 'pause_media':

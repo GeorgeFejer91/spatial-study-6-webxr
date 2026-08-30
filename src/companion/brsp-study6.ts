@@ -3,20 +3,24 @@ import { z } from 'zod'
 import { BRIDGE_RECEIPT_STAGES } from '../bridge/contract.ts'
 import {
   CompanionStatusSchema,
+  RemoteCommandRequestSchema,
   remoteCommandNames,
   type CompanionStatus,
   type RemoteCommandName,
+  type RemoteCommandRequest,
 } from './protocol.ts'
 
 export const STUDY6_BRSP_CAPABILITIES = [
   'command-ack',
   'state-snapshot',
   'latest-state',
-  'study6-status-v1',
+  'study6-operator-v2',
 ] as const
 
 export const STUDY6_BRSP_SCOPES = [
   'study.status.read',
+  'study.setup.control',
+  'study.participant.control',
   'study.view.control',
   'study.media.control',
   'study.questionnaire.control',
@@ -33,6 +37,8 @@ export interface Study6BrspCommandRoute {
 }
 
 const routes = {
+  configure_study: 'study.setup.control',
+  start_participant: 'study.participant.control',
   request_status: 'study.status.read',
   recenter_panel: 'study.view.control',
   start_block: 'study.media.control',
@@ -69,18 +75,12 @@ export function brspToRemoteCommand(
   scope: string,
   action: string,
   args: unknown,
-): RemoteCommandName | null {
-  if (
-    typeof args !== 'object' ||
-    args === null ||
-    Array.isArray(args) ||
-    Object.keys(args).length !== 0 ||
-    !(remoteCommandNames as readonly string[]).includes(action)
-  ) {
-    return null
-  }
+): RemoteCommandRequest | null {
+  if (!(remoteCommandNames as readonly string[]).includes(action)) return null
   const name = action as RemoteCommandName
-  return routes[name] === scope ? name : null
+  if (routes[name] !== scope) return null
+  const parsed = RemoteCommandRequestSchema.safeParse({ name, args })
+  return parsed.success ? parsed.data : null
 }
 
 /** Strictly validate the privacy-minimized state before it enters BRSP. */

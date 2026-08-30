@@ -2,6 +2,11 @@ import {
   canAdvanceAssessment,
   canGoBackAssessment,
 } from "./reducer"
+import {
+  RemoteCommandRequestSchema,
+  remoteCommandNames,
+  type RemoteCommandName as CompanionRemoteCommandName,
+} from "../companion/protocol"
 import type { ExperimentState } from "./types"
 
 export const REMOTE_COMMAND_PROTOCOL =
@@ -10,21 +15,8 @@ export const REMOTE_STATUS_PROTOCOL =
   "spatial.study6.companion.status.v1" as const
 export const MAX_REMOTE_COMMAND_BYTES = 2_048
 
-export const REMOTE_COMMAND_NAMES = [
-  "request_status",
-  "recenter_panel",
-  "start_block",
-  "pause_media",
-  "resume_media",
-  "advance",
-  "back",
-  "abort_session",
-  "finalize_session",
-  "reconnect_sensor",
-  "return_to_experiment",
-  "request_export",
-] as const
-export type RemoteCommandName = (typeof REMOTE_COMMAND_NAMES)[number]
+export const REMOTE_COMMAND_NAMES = remoteCommandNames
+export type RemoteCommandName = CompanionRemoteCommandName
 
 export interface RemoteCommand {
   protocol: typeof REMOTE_COMMAND_PROTOCOL
@@ -33,6 +25,7 @@ export interface RemoteCommand {
   issued_at_unix_ms: number
   expected_revision: number
   command: RemoteCommandName
+  args: unknown
 }
 
 export type RemoteCommandParseResult =
@@ -41,6 +34,15 @@ export type RemoteCommandParseResult =
 
 export type RemoteIntent =
   | { type: "report_status" }
+  | {
+      type: "configure_study"
+      configuration: {
+        variantId: "DHS" | "SHD"
+        languageCode: "en" | "de"
+        timingMode: "full" | "clipped"
+      }
+    }
+  | { type: "start_participant"; participantId: string }
   | { type: "recenter_panel" }
   | { type: "start_block" }
   | { type: "pause_media" }
@@ -85,6 +87,7 @@ export function parseRemoteCommandJson(raw: string): RemoteCommandParseResult {
     "issued_at_unix_ms",
     "expected_revision",
     "command",
+    "args",
   ]
   const actualKeys = Object.keys(value).sort()
   if (
@@ -134,17 +137,25 @@ export function parseRemoteCommandJson(raw: string): RemoteCommandParseResult {
       detail: "Expected revision must be a nonnegative integer.",
     }
   }
-  if (
-    typeof value.command !== "string" ||
-    !(REMOTE_COMMAND_NAMES as readonly string[]).includes(value.command)
-  ) {
+  const request = RemoteCommandRequestSchema.safeParse({
+    name: value.command,
+    args: value.args,
+  })
+  if (!request.success) {
     return {
       accepted: false,
-      code: "unknown_command",
-      detail: "The requested operation is not in the command allowlist.",
+      code: "invalid_command_request",
+      detail: "The requested operation or its arguments are outside the command profile.",
     }
   }
-  return { accepted: true, command: value as unknown as RemoteCommand }
+  return {
+    accepted: true,
+    command: {
+      ...(value as unknown as RemoteCommand),
+      command: request.data.name,
+      args: request.data.args,
+    },
+  }
 }
 
 export function guardRemoteCommand(
@@ -152,7 +163,18 @@ export function guardRemoteCommand(
   command: RemoteCommand,
   controlEnabled: boolean,
 ): RemoteGuardDecision {
-  if (command.command === "request_status") {
+  const request = RemoteCommandRequestSchema.safeParse({
+    name: command.command,
+    args: command.args,
+  })
+  if (!request.success) {
+    return {
+      accepted: false,
+      code: "invalid_command_request",
+      detail: "The command or its arguments are outside the Study 6 profile.",
+    }
+  }
+  if (request.data.name === "request_status") {
     return { accepted: true, intent: { type: "report_status" } }
   }
   if (command.expected_revision !== state.revision) {
@@ -169,7 +191,35 @@ export function guardRemoteCommand(
       detail: "The local operator has not enabled companion control.",
     }
   }
-  switch (command.command) {
+  switch (request.data.name) {
+    case "configure_study":
+      return state.page === "operator_setup" && state.configuration === null
+        ? {
+            accepted: true,
+            intent: {
+              type: "configure_study",
+              configuration: request.data.args,
+            },
+          }
+        : {
+            accepted: false,
+            code: "configuration_not_allowed",
+            detail: "Study configuration is only mutable on the operator setup page.",
+          }
+    case "start_participant":
+      return state.page === "participant_id" && state.configuration !== null && state.sessionId === null
+        ? {
+            accepted: true,
+            intent: {
+              type: "start_participant",
+              participantId: request.data.args.participantId,
+            },
+          }
+        : {
+            accepted: false,
+            code: "participant_start_not_allowed",
+            detail: "Participant selection is only available before allocation.",
+          }
     case "recenter_panel":
       return { accepted: true, intent: { type: "recenter_panel" } }
     case "start_block":
