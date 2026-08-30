@@ -33,6 +33,8 @@ export const QUESTIONNAIRE_VISUAL_CONTRACT = {
     height: 72,
     paddingBottom: 8,
     compactControlWidth: 164,
+    kioskControlWidth: 142,
+    compactControlGap: 8,
     compactControlHeight: 52,
     titleDefaultSize: 30,
     titleMediumSize: 26,

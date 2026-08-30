@@ -52,6 +52,7 @@ export class SpatialStudyPanel {
   readonly eyebrow: Text
   readonly title: Text
   readonly progress: Text
+  readonly kioskStatus: Text
   readonly footerHint: Text
   readonly footerStatus: Text
   private interactionMode: StudyPanelInteractionMode = 'pointer'
@@ -116,6 +117,11 @@ export class SpatialStudyPanel {
     })
     heading.add(this.title)
 
+    const headerControls = new Container({
+      flexDirection: 'row',
+      alignItems: 'center',
+      gapColumn: contract.header.compactControlGap,
+    })
     this.progress = new Text({
       width: contract.header.compactControlWidth,
       height: contract.header.compactControlHeight,
@@ -137,7 +143,24 @@ export class SpatialStudyPanel {
       },
     })
     this.progress.name = 'study6-panel-interaction-mode'
-    this.header.add(heading, this.progress)
+    this.kioskStatus = new Text({
+      width: contract.header.kioskControlWidth,
+      height: contract.header.compactControlHeight,
+      text: 'Kiosk · Off',
+      color: STUDY_UI_COLORS.text,
+      fontSize: 13,
+      fontWeight: 'bold',
+      textAlign: 'center',
+      lineHeight: '100%',
+      backgroundColor: STUDY_UI_COLORS.panelRaised,
+      borderColor: STUDY_UI_COLORS.border,
+      borderWidth: contract.button.borderWidth,
+      borderRadius: contract.button.borderRadius,
+      pointerEvents: 'none',
+    })
+    this.kioskStatus.name = 'study6-panel-kiosk-status'
+    headerControls.add(this.progress, this.kioskStatus)
+    this.header.add(heading, headerControls)
 
     this.body = new Container({
       width: '100%',
@@ -221,6 +244,7 @@ export class SpatialStudyPanel {
       pointerEvents: visible ? 'auto' : 'none',
       cursor: visible ? 'pointer' : 'default',
     })
+    this.kioskStatus.setProperties({ display: visible ? 'flex' : 'none' })
     if (visible) this.projectInteractionMode()
   }
 

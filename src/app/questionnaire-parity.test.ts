@@ -122,6 +122,10 @@ describe('pinned native questionnaire authority', () => {
     expect(property(panel.progress, 'text')).toBe('Direct mode')
     expect(property(panel.progress, 'width')).toBe(164)
     expect(property(panel.progress, 'height')).toBe(52)
+    expect(property(panel.kioskStatus, 'width')).toBe(142)
+    expect(property(panel.kioskStatus, 'height')).toBe(52)
+    expect(property(panel.kioskStatus, 'text')).toBe('Kiosk · Off')
+    expect(property(panel.kioskStatus, 'pointerEvents')).toBe('none')
     expect(property(panel.root, 'pixelSize')).toBeCloseTo(0.00125 / 6, 12)
   })
 })
@@ -155,6 +159,23 @@ describe('native questionnaire controls', () => {
     const largest = named(dominance, 'study6-sam-row-dominance-choice-9-image')
     expect(property(largest, 'width')).toBeCloseTo(103.224, 3)
     expect(Number(property(largest, 'width'))).toBeGreaterThan(72)
+    expect((largest as Object3D & { material: { clippingPlanes: unknown[] } }).material.clippingPlanes).toEqual([])
+  })
+
+  it('renders all 27 native SAM figures with intentional overflow unclipped', () => {
+    const panel = render('self_assessment_manikin')
+    const images: Object3D[] = []
+    panel.body.traverse((object) => {
+      if (object.name.endsWith('-image')) images.push(object)
+    })
+
+    expect(images).toHaveLength(27)
+    images.forEach((image) => {
+      expect(property(image, 'src')).toMatch(/assets\/sam\/(?:valence|arousal)\/.+\.png$/)
+      expect(
+        (image as Object3D & { material: { clippingPlanes: unknown[] } }).material.clippingPlanes,
+      ).toEqual([])
+    })
   })
 
   it('keeps the native slider shell, thumb, track, and numeric bubble visible before touch', () => {

@@ -388,6 +388,9 @@ export function samRow(options: {
       objectFit: 'fill',
       pointerEvents: 'none',
     })
+    // The native SAM contract intentionally lets figures extend beyond cards.
+    image.material.clippingPlanes = []
+    image.material.needsUpdate = true
     image.name = `${card.name}-image`
     const number = new Text({
       width: '100%',
