@@ -18,6 +18,26 @@ describe('companion pairing protocol', () => {
     expect(decodePairingDescriptor(`#pair=${encodePairingDescriptor(descriptor)}`)).toEqual(descriptor)
   })
 
+  it('keeps the declared maximum relay descriptor within the decoder bound', () => {
+    const descriptor = createPairingDescriptor(false, {
+      protocol: 'study6.relay.v1',
+      url: `wss://relay.example.test/${'a'.repeat(480)}`,
+      room: 'r'.repeat(80),
+      token: 'a'.repeat(128),
+    })
+    const encoded = encodePairingDescriptor(descriptor)
+    expect(encoded.length).toBeLessThanOrEqual(2_048)
+    expect(decodePairingDescriptor(encoded)).toEqual(descriptor)
+  })
+
+  it('rejects unknown pairing fields instead of silently widening authority', () => {
+    const descriptor = createPairingDescriptor()
+    expect(() => encodePairingDescriptor({
+      ...descriptor,
+      arbitraryCommand: true,
+    } as never)).toThrow()
+  })
+
   it('authenticates and encrypts bounded messages', async () => {
     const descriptor = createPairingDescriptor()
     const message = {
@@ -60,6 +80,11 @@ describe('companion pairing protocol', () => {
       'resume_media',
       'advance',
       'back',
+      'abort_session',
+      'finalize_session',
+      'reconnect_sensor',
+      'return_to_experiment',
+      'request_export',
     ])
   })
 

@@ -1,9 +1,13 @@
 # Spatial Study 6 WebXR
 
-Spatial Study 6 WebXR is a browser and immersive-WebXR implementation of the
-Study 6 operator flow, participant allocation, four-condition sequence, guided
-audio, and questionnaires. It is designed for static hosting on GitHub Pages
-and runs without an application server.
+Spatial Study 6 WebXR is the experiment authority in a hybrid Quest
+application. It owns the questionnaire and condition logic, progression, study
+reducer, browser IndexedDB record, and study JSON/CSV exports. A separate native
+Sensor Bridge APK is only a sensor-recorder provider: it owns Polar H10
+Bluetooth, continuous ECG writing, timestamped metadata markers, recorder
+finalization, and the sensor artifact export. The browser assets remain
+statically hosted on GitHub Pages; the page talks to the APK through an
+authenticated loopback WebSocket.
 
 > **Incubator / test-only build.** This site is participant-ineligible and is
 > not a production study or a replacement for an approved native build. Its
@@ -22,16 +26,26 @@ The intended public endpoints are:
 - controller, hand/pinch, mouse, and touch pointer interaction;
 - Quest system text entry for names, age, and manual IDs;
 - English and German operator/participant copy;
-- DHS (`PH`) and SHD (`PI`) participant pools, deterministic 24-order
-  condition/audio allocation, and local no-reuse selection;
+- DHS (`PH`) and SHD (`PI`) participant pools and deterministic 24-order
+  condition/audio allocation;
 - eight 300-second `Hand`/`Env` × `HC`/`LC` × `HE`/`LE` placeholder videos;
 - the exact V01–V04 English/German guided-audio set used by the pinned source;
 - four questionnaire rounds covering SAM, affect, emotions, ownership, and
   agency;
-- append-only IndexedDB records, immutable export revisions, JSON/CSV export,
-  and unfinished-session recovery after reload; and
+- a strict sensor-recorder `study6.bridge.v1` client with
+  process/page/transport epochs, recording-revision fencing, staged effect
+  receipts, and native golden fixtures;
+- a live, bounded Polar status/waveform gate populated only by real APK samples;
+- a WebXR-authoritative questionnaire/condition reducer with browser IndexedDB
+  recovery and study JSON/CSV exports;
+- privacy-minimized experiment markers sent to the APK so its ECG artifact can
+  be correlated with WebXR events without transferring questionnaire answers;
+- explicit APK sensor reconnect, recorder finalize, and sensor-export requests;
+- decoded Web Audio and clock/barrier libraries ready for later hardware timing
+  integration; and
 - an explicitly enabled VDO.Ninja companion that mirrors the spectator canvas
-  and can issue only bounded, revision-checked study commands.
+  and issues only WebRTC/DTLS-protected, bounded, revision-checked study
+  commands to WebXR, which forwards only sensor-recorder effects to the APK.
 
 The normal timing mode runs each block for five minutes. The clipped mode runs
 ten-second blocks for diagnostics only. Both routes remain test-only and
@@ -46,8 +60,18 @@ npm ci
 npm run dev
 ```
 
-Open the local URL printed by Vite. A desktop browser provides the browser
-view. A compatible headset browser on an HTTPS origin exposes **Enter VR**.
+Open the local URL printed by Vite. WebXR owns study state in every mode. By
+default, Start additionally requires a ready Sensor Bridge APK and fails closed
+if real acquisition is unavailable. For isolated questionnaire/UI work only,
+use:
+
+```text
+?sensor=disabled-rehearsal
+```
+
+That explicit route disables the sensor requirement and remains participant
+ineligible. It uses the same origin-scoped browser study store as hybrid mode.
+A compatible headset browser on an HTTPS origin exposes **Enter VR**.
 WebXR immersive sessions generally require a secure context; a plain HTTP LAN
 URL is useful for desktop checking but may not be admitted by a headset.
 
@@ -60,41 +84,63 @@ At operator setup:
 5. enter only synthetic test demographics unless a separately approved study
    protocol explicitly authorizes real participant data.
 
-The app recovers an unfinished session from the same browser profile on reload.
-At completion, export both JSON and CSV before clearing browser storage or
-moving to a different device/profile.
+In every mode, WebXR recovers the study session from the same browser profile
+and offers study JSON/CSV export. In hybrid mode, the APK separately keeps the
+durable ECG samples and marker journal and owns finalization/export of that
+sensor artifact.
 
 ## Optional companion
 
 Pairing is off by default. In the experiment, select **Browser companion**,
-then explicitly enable one-time pairing. Scan or copy the generated fragment
+then explicitly enable a pairing session. Scan or copy the generated fragment
 URL into `companion.html`. Remote control is a second opt-in and starts off.
+The session link can reconnect one controller at a time until pairing is stopped
+on the headset; starting a new pairing session creates a new descriptor.
 
-The companion can request status, recenter the panel, start an admissible
-block, pause/resume media, or use reducer-admissible back/advance actions. It
-cannot enter participant data, answer questionnaires, grant consent, enter VR,
-export records, or delete records. The image is the browser's spectator canvas,
-not an exact binocular compositor capture, and this application does not
-record it.
+The companion uses BRSP/1 over two dedicated WebRTC data channels: reliable
+ordered commands/receipts and unordered latest-state telemetry. The peers prove
+the random 256-bit session secret mutually, negotiate narrow scopes, and fence
+commands with the authoritative WebXR revision. It can request status, recenter
+the panel, start an admissible block, pause/resume media, navigate, request
+sensor reconnect/return, and explicitly confirm a WebXR-owned abort or an APK
+recorder finalize/sensor-export request.
+It cannot enter participant data, answer questionnaires, grant consent, enter
+VR, receive an export, or delete records. Today it routes through the active
+WebXR page; the experimental relay is not production-wired, and direct APK
+control during a browser failure is not implemented. The image is the browser's
+spectator canvas, not an exact binocular compositor capture.
 
-Treat the pairing link as a short-lived secret. Stop pairing before leaving a
-headset unattended.
+Only one BRSP controller is admitted per pairing session. Treat the pairing link
+as a short-lived secret and stop pairing before leaving a headset unattended.
+
+Companion status is privacy-minimized, not anonymous. It includes language,
+whether a participant and immersive session are active, phase, block and
+condition code, media timing/paused state, live heart rate, ECG sample
+rate/count/age, and APK/recorder health counters. It excludes participant
+names/IDs, demographics, questionnaire answers, and raw ECG samples. Records
+and prepared sensor exports never traverse the companion channel.
 
 ## Data and privacy boundary
 
 There is no study backend, account system, analytics integration, or automatic
-result upload. Study state is stored unencrypted in origin-scoped IndexedDB on
-the local browser profile. Anyone with access to that profile or its storage
-may be able to read it. Clearing site data, using a different profile, or
-resetting the device can permanently remove the registry and sessions.
+result upload. Study state, condition assignment, demographics, questionnaire
+answers, and browser audit events remain in origin-scoped IndexedDB and are
+included in the browser's explicit study export. Raw ECG and its
+privacy-minimized marker journal stay in the APK's app-private storage and are
+never sent over VDO.Ninja. The browser store is not application-encrypted;
+anyone with access to that profile may be able to read it. Clearing site data
+can remove the browser study record; clearing APK data can remove the separate
+sensor record.
 
 GitHub Pages still serves the static files and may process ordinary request
 metadata under GitHub's own policies. If an operator explicitly enables the
 companion, the app contacts VDO.Ninja public signaling and STUN/TURN services.
 A direct WebRTC route can disclose peer IP addresses, and the spectator image
-may show participant-entered text. Application messages are encrypted with a
-one-time AES-GCM key carried in the URL fragment, but that does not remove
-signaling, endpoint, or operator-side privacy risks.
+may show participant-entered text. BRSP application frames travel inside
+WebRTC's DTLS-protected data channels; the fragment secret is used for mutual
+HMAC proof and VDO.Ninja session protection, not as a separate one-time AES-GCM
+application-message wrapper. This does not remove signaling, endpoint, or
+operator-side privacy risks.
 
 Do not commit exports, participant names/IDs/responses, pairing links, browser
 profiles, headset pulls, logs, captures, credentials, or signing material.
@@ -123,7 +169,7 @@ Questionnaire geometry, palette, controls, and navigation are regression-bound
 to the pinned native Android panel in `src/ui/questionnaire-contract.ts`.
 Passing host tests does not establish visual parity: final acceptance still
 requires attended empty/completed page comparisons in Quest Browser against
-the exact native APK authority.
+the exact native APK visual oracle.
 
 On Windows, validate the immutable media manifests and files as well:
 
@@ -144,12 +190,34 @@ any study use, validate both DHS and SHD, both timing paths, controller and
 physical hand input, system keyboard behavior, audio playback, reload recovery,
 exports, and the companion on the exact deployed revision.
 
+## Hybrid Sensor Bridge implementation
+
+The implemented host-side slice and its exact limitations are documented in
+[`docs/HYBRID_IMPLEMENTATION.md`](docs/HYBRID_IMPLEMENTATION.md). The broader
+architecture, direct-APK relay options, Tauri/PWA assessment, synchronization
+contract, and hardware qualification plan remain in
+[`docs/QUEST_WEBXR_BLE_BRIDGE_ARCHITECTURE.md`](docs/QUEST_WEBXR_BLE_BRIDGE_ARCHITECTURE.md).
+The current build still has three explicit production gaps:
+
+- the future-`T0` audio/ECG start barrier exists as host-side timing logic but is
+  not production-wired into the controller and recorder;
+- the experimental relay is not production-wired into WebXR/APK failover; and
+- physical Meta Quest + Polar H10 validation, including loopback behavior,
+  foreground BLE survival, BRSP phone/PC behavior over direct and forced-TURN
+  routes, visual parity, and measured audio/ECG onset, is pending.
+
 ## GitHub Pages deployment
 
 The Vite base path is fixed to `/spatial-study-6-webxr/`. The workflow in
 `.github/workflows/pages.yml` tests and builds every push to `main`, uploads
 only `dist/`, and deploys it with GitHub's official Pages actions. It can also
 be run manually.
+
+Every build includes `release-manifest.json` with artifact and bridge-contract
+hashes. It is labelled `unsigned_rehearsal` unless the protected Pages
+environment supplies an Ed25519 signing key and key ID. A participant release
+must additionally pin the native bridge source revision, APK version, and APK
+SHA-256 through the documented workflow variables.
 
 For the first deployment, create the public repository with the exact name
 `spatial-study-6-webxr`, push `main`, then choose **GitHub Actions** under
@@ -159,12 +227,14 @@ also update `base` in `vite.config.ts`.
 
 ## Provenance
 
-The questionnaire, allocation, copy, and audio projection is pinned to
+The questionnaire geometry, participant copy, and Polar-readiness projection are pinned to
 [`MesmerPrism/spatial-study-6`](https://github.com/MesmerPrism/spatial-study-6)
-commit `dd41646e02e4a1d73b990626b74048d34ce8f26a` (tree
-`0764bcfad349aee20724b3a8fe50c776410fe3d3`), with upstream authority pinned in
-the machine-readable files under `public/assets/manifests/`. Those manifests
-also record every public media hash and the placeholder-generation parameters.
+commit `384935890d8ba29a2851002163352019d65768f6` (tree
+`3bdba70e545b7b9224c0e8469b49d64b405b24b9`). The admitted audio and SAM raster
+bytes remain independently pinned to the earlier `dd41646…` intake in their
+machine-readable files under `public/assets/manifests/`; their hashes did not
+change as part of the UI-authority update. Those manifests also record every
+public media hash and the placeholder-generation parameters.
 
 The public repository contains no real stimulus implementation. See
 [`public/assets/README.md`](public/assets/README.md) for the admitted asset set

@@ -71,6 +71,7 @@ export type StudyAction =
   | { type: "advance_assessment"; recordedAtUtc?: string }
   | { type: "back_assessment" }
   | { type: "enter_technical_hold"; reason: string }
+  | { type: "abort_session"; reason: string; abortedAtUtc: string }
 
 export function createInitialExperimentState(): ExperimentState {
   return {
@@ -556,6 +557,34 @@ export function reduceStudy(
             : state.media,
       })
     }
+    case "abort_session": {
+      if (!state.sessionId || state.page === "complete" || state.page === "aborted") {
+        return rejected(state, "abort_not_allowed", "There is no active session to abort.")
+      }
+      const reason = action.reason.trim()
+      if (!reason || reason.length > 96) {
+        return rejected(state, "abort_reason_invalid", "Abort requires a bounded reason.")
+      }
+      if (!validInstant(action.abortedAtUtc)) {
+        return rejected(state, "abort_time_invalid", "Abort time is not RFC 3339.")
+      }
+      return accepted({
+        ...state,
+        page: "aborted",
+        technicalHoldReason: reason,
+        finalizedAtUtc: action.abortedAtUtc,
+        eligibilityBlockers: Array.from(
+          new Set([
+            ...state.eligibilityBlockers.filter((blocker) => blocker !== "session_incomplete"),
+            "session_aborted",
+          ]),
+        ).sort(),
+        media:
+          state.media.status === "playing"
+            ? { ...state.media, status: "paused" }
+            : state.media,
+      })
+    }
   }
 }
 
@@ -604,6 +633,9 @@ export function validateExperimentState(state: ExperimentState): string[] {
       errors.push("complete_state_has_incomplete_blocks")
     }
     if (!state.finalizedAtUtc) errors.push("complete_state_missing_finalization")
+  }
+  if (state.page === "aborted" && (!state.sessionId || !state.finalizedAtUtc)) {
+    errors.push("aborted_state_missing_terminal_identity")
   }
   return errors
 }

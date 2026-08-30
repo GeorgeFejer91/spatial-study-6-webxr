@@ -21,6 +21,13 @@ jobs:
     name: Test and build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      STUDY6_RELEASE_SIGNING_KEY_PEM: ${{ secrets.STUDY6_RELEASE_SIGNING_KEY_PEM }}
+      STUDY6_RELEASE_SIGNING_KEY_ID: ${{ vars.STUDY6_RELEASE_SIGNING_KEY_ID }}
+      STUDY6_REQUIRE_SIGNED_RELEASE: ${{ vars.STUDY6_REQUIRE_SIGNED_RELEASE || '0' }}
+      STUDY6_NATIVE_BRIDGE_SOURCE_REVISION: ${{ vars.STUDY6_NATIVE_BRIDGE_SOURCE_REVISION }}
+      STUDY6_NATIVE_BRIDGE_APK_VERSION: ${{ vars.STUDY6_NATIVE_BRIDGE_APK_VERSION }}
+      STUDY6_NATIVE_BRIDGE_APK_SHA256: ${{ vars.STUDY6_NATIVE_BRIDGE_APK_SHA256 }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,8 +47,14 @@ jobs:
       - name: Run unit, type, and production-build checks
         run: npm run check
 
+      - name: Test bounded control relay
+        run: cargo test --locked --manifest-path services/control-relay/Cargo.toml
+
       - name: Include release notices in the static artifact
         run: cp LICENSE NOTICE.md README.md dist/
+
+      - name: Refresh release manifest after notices
+        run: npm run manifest:release
 
       - name: Upload static Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0

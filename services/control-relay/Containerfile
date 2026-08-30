@@ -1,0 +1,13 @@
+FROM rust:1.96-bookworm AS build
+WORKDIR /source
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --locked --release
+
+FROM debian:bookworm-slim
+RUN useradd --system --uid 65532 --no-create-home relay
+COPY --from=build /source/target/release/study6-control-relay /usr/local/bin/study6-control-relay
+USER relay
+ENV STUDY6_RELAY_BIND=0.0.0.0:8787
+EXPOSE 8787
+ENTRYPOINT ["/usr/local/bin/study6-control-relay"]

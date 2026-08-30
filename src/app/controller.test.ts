@@ -7,6 +7,13 @@ vi.mock('./companion-controls.ts', () => ({
 }))
 
 import type { StudyMediaPlayer, StudyMediaSnapshot } from '../media/player.ts'
+import {
+  FakeStudyBridgeTransport,
+  polarProjectionFromSnapshot,
+  StudyBridgeClient,
+  STUDY_BRIDGE_PROTOCOL,
+} from '../bridge/index.ts'
+import { acquisitionSnapshotPayload, apkHelloPayload } from '../test/bridge-fixtures.ts'
 import { StudyDatabase, type SessionRevision } from '../persistence/database.ts'
 import {
   createInitialExperimentState,
@@ -28,10 +35,17 @@ interface ControllerInternals {
   sessionFinalized: boolean
   controlEnabled: boolean
   localMessage: string
+  usedParticipantIds: string[]
   applyAction(action: StudyAction): Promise<boolean>
   startParticipant(participantId: string): Promise<void>
+  companionStatus(): {
+    authority: string
+    bridgeConnected: boolean
+    polarReady: boolean
+    lastReceiptStage: string | null
+  }
   handleRemoteCommand(
-    name: 'start_block',
+    name: 'start_block' | 'reconnect_sensor' | 'abort_session',
     expectedRevision: number,
   ): Promise<{ accepted: boolean; code: string; message: string }>
 }
@@ -96,7 +110,7 @@ function mediaFake() {
   }
 }
 
-function controllerFixture() {
+function controllerFixture(bridge?: StudyBridgeClient) {
   const shell = {
     canvas: document.createElement('canvas'),
     companionSlot: document.createElement('div'),
@@ -121,6 +135,7 @@ function controllerFixture() {
     runtime: runtime as unknown as StudyXRRuntime,
     media: media as unknown as StudyMediaPlayer,
     panelRenderer: panelRenderer as unknown as StudyPanelRenderer,
+    bridge,
   })
   return { controller, internals: controller as unknown as ControllerInternals, shell, runtime, media, panelRenderer }
 }
@@ -146,6 +161,115 @@ afterEach(() => {
 })
 
 describe('StudyController runtime durability', () => {
+  it('keeps WebXR authoritative while the APK provides only recording effects', async () => {
+    const transport = new FakeStudyBridgeTransport()
+    let nextId = 0
+    const bridge = new StudyBridgeClient({
+      transport,
+      browserPageEpoch: 'browser-page-1',
+      browserInstanceId: 'browser-1',
+      createId: () => `id-${++nextId}`,
+    })
+    const fixture = controllerFixture(bridge)
+    await fixture.controller.initialize()
+    expect(fixture.internals.database).not.toBeNull()
+
+    const bridgeProjection = bridge.snapshot()
+    const common = {
+      protocol: STUDY_BRIDGE_PROTOCOL,
+      bridgeProcessEpoch: 'apk-process-1',
+      browserPageEpoch: bridgeProjection.browserPageEpoch,
+      transportEpoch: bridgeProjection.transportEpoch,
+      revision: 0,
+      sender: { role: 'apk' as const, instanceId: 'apk-1' },
+      target: 'webxr' as const,
+    }
+    transport.receive({
+      ...common,
+      messageId: 'hello-1',
+      type: 'hello',
+      payload: apkHelloPayload(),
+    })
+    const sensorPayload = acquisitionSnapshotPayload()
+    const polar = polarProjectionFromSnapshot(sensorPayload)
+    transport.receive({
+      ...common,
+      messageId: 'snapshot-0',
+      type: 'snapshot',
+      payload: sensorPayload,
+    })
+
+    const action: StudyAction = {
+      type: 'configure',
+      configuration: { variantId: 'DHS', languageCode: 'en', timingMode: 'clipped' },
+    }
+    await expect(fixture.internals.applyAction(action)).resolves.toBe(true)
+    const reduced = reduceStudy(createInitialExperimentState(), action)
+    if (!reduced.accepted) throw new Error(reduced.detail)
+    expect(fixture.internals.state).toEqual(reduced.state)
+    expect(transport.sent.filter((message) => message.type === 'command')).toHaveLength(0)
+
+    // A newer recorder snapshot updates sensor health, never questionnaire/condition state.
+    transport.receive({
+      ...common,
+      revision: 2,
+      messageId: 'snapshot-2',
+      type: 'snapshot',
+      payload: acquisitionSnapshotPayload(2),
+    })
+    expect(fixture.internals.state).toEqual(reduced.state)
+    expect(fixture.panelRenderer.render).toHaveBeenLastCalledWith(
+      reduced.state,
+      expect.objectContaining({ polar }),
+    )
+
+    fixture.internals.controlEnabled = true
+    const forwarded = fixture.internals.handleRemoteCommand('reconnect_sensor', 1)
+    await vi.waitFor(() =>
+      expect(transport.sent.some((message) => message.type === 'command')).toBe(true),
+    )
+    const reconnectCommand = transport.sent.at(-1)!
+    expect(reconnectCommand).toMatchObject({
+      expectedRevision: 2,
+      payload: { action: 'reconnect_sensor' },
+    })
+    transport.receive({
+      ...common,
+      revision: 2,
+      messageId: 'receipt-reconnect-applied',
+      correlationId: reconnectCommand.messageId,
+      type: 'receipt',
+      payload: {
+        commandMessageId: reconnectCommand.messageId,
+        stage: 'applied',
+        outcome: 'sensor_reconnect_started',
+        detail: 'Polar reconnect requested.',
+        effectiveRevision: 2,
+      },
+    })
+    await expect(forwarded).resolves.toMatchObject({
+      accepted: true,
+      stage: 'applied',
+      sensorRevision: 2,
+    })
+    expect(fixture.internals.companionStatus()).toMatchObject({
+      authority: 'webxr_experiment_owner',
+      bridgeConnected: true,
+      polarReady: false,
+      lastReceiptStage: 'applied',
+    })
+
+    fixture.internals.state = blockReadyState()
+    await expect(
+      fixture.internals.handleRemoteCommand(
+        'start_block',
+        fixture.internals.state.revision,
+      ),
+    ).resolves.toMatchObject({ accepted: false, code: 'start_failed' })
+    expect(fixture.media.load).not.toHaveBeenCalled()
+    expect(fixture.internals.localMessage).toContain('gated by the Sensor Bridge')
+  })
+
   it('waits for the durable start-block revision before acknowledging a remote start', async () => {
     const fixture = controllerFixture()
     const state = blockReadyState()
@@ -272,5 +396,31 @@ describe('StudyController runtime durability', () => {
     expect(fixture.internals.state).toEqual(createInitialExperimentState())
     expect(fixture.panelRenderer.resetTransientState).toHaveBeenCalledOnce()
     expect(fixture.media.hide).toHaveBeenCalled()
+  })
+
+  it('persists a remote abort in WebXR and finalizes browser storage without an APK', async () => {
+    const fixture = controllerFixture()
+    const database = databaseFake()
+    fixture.internals.state = blockReadyState()
+    fixture.internals.database = database as unknown as StudyDatabase
+    fixture.internals.durableRevision = 0
+    fixture.internals.controlEnabled = true
+
+    await expect(
+      fixture.internals.handleRemoteCommand(
+        'abort_session',
+        fixture.internals.state.revision,
+      ),
+    ).resolves.toMatchObject({
+      accepted: true,
+      code: 'aborted',
+      stage: 'persisted',
+    })
+
+    expect(fixture.internals.state.page).toBe('aborted')
+    expect(database.appendRevision).toHaveBeenCalledOnce()
+    expect(database.finalizeSession).toHaveBeenCalledWith('session-1', 'abandoned')
+    expect(fixture.internals.sessionFinalized).toBe(true)
+    expect(fixture.media.pause).toHaveBeenCalled()
   })
 })

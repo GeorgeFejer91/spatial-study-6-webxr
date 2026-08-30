@@ -7,7 +7,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node tools/build-release-manifest.mjs",
+    "manifest:release": "node tools/build-release-manifest.mjs",
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
@@ -19,6 +20,8 @@
     "@types/node": "24.10.9",
     "@types/qrcode": "1.5.6",
     "@types/three": "0.185.4",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "fake-indexeddb": "6.2.5",
     "jsdom": "30.0.1",
     "typescript": "~6.0.2",

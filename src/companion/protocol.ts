@@ -1,8 +1,13 @@
 import { z } from 'zod'
 
+import {
+  BRIDGE_RECEIPT_STAGES,
+} from '../bridge/contract.ts'
+
 const base64UrlPattern = /^[A-Za-z0-9_-]+$/
 const publicTokenPattern = /^[a-z0-9_-]+$/
 
+/** Controller intents target the WebXR experiment owner, not the sensor APK. */
 export const remoteCommandNames = [
   'request_status',
   'recenter_panel',
@@ -11,17 +16,39 @@ export const remoteCommandNames = [
   'resume_media',
   'advance',
   'back',
+  'abort_session',
+  'finalize_session',
+  'reconnect_sensor',
+  'return_to_experiment',
+  'request_export',
 ] as const
 
 export type RemoteCommandName = (typeof remoteCommandNames)[number]
 
+export const RelayDescriptorSchema = z.object({
+  protocol: z.literal('study6.relay.v1'),
+  url: z
+    .string()
+    .url()
+    .max(512)
+    .refine((value) => value.startsWith('wss://') || /^ws:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//u.test(value), {
+      message: 'Relay URL must use WSS, except for an explicit loopback development URL.',
+    }),
+  room: z.string().min(16).max(80).regex(publicTokenPattern),
+  token: z.string().min(43).max(128).regex(base64UrlPattern),
+}).strict()
+
+export type RelayDescriptor = z.infer<typeof RelayDescriptorSchema>
+
 export const PairingDescriptorSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
+  controlProtocol: z.literal('brsp/1'),
   room: z.string().min(16).max(80).regex(publicTokenPattern),
   streamId: z.string().min(16).max(80).regex(publicTokenPattern),
   key: z.string().length(43).regex(base64UrlPattern),
   forceTurn: z.boolean(),
-})
+  relay: RelayDescriptorSchema.optional(),
+}).strict()
 
 export type PairingDescriptor = z.infer<typeof PairingDescriptorSchema>
 
@@ -44,10 +71,56 @@ export const CompanionStatusSchema = z.object({
   mediaDurationSeconds: z.number().min(0).max(86_400).nullable(),
   mediaPaused: z.boolean(),
   storageHealthy: z.boolean(),
+  authority: z.literal('webxr_experiment_owner'),
+  bridgeConnected: z.boolean(),
+  recordingState: z.enum(['unavailable', 'recording', 'finalized', 'fault']),
+  recordingRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  recordingMarkerCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  recordingSamplesWritten: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  recordingDroppedBatches: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  recordingArtifactOpen: z.boolean(),
+  recordingDurable: z.boolean(),
+  polarPhase: z.enum([
+    'unavailable',
+    'permission_required',
+    'scanning',
+    'detected',
+    'connecting',
+    'connected',
+    'streaming',
+    'fault',
+  ]),
+  polarReady: z.boolean(),
+  polarReadinessReason: z.string().max(240),
+  heartRateBpm: z.number().int().min(20).max(260).nullable(),
+  ecgSampleRateHz: z.number().min(0).max(2_000).nullable(),
+  ecgSampleCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  lastEcgSampleAgeMs: z.number().nonnegative().max(86_400_000).nullable(),
+  polarWriterHealthy: z.boolean(),
+  polarReconnectCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  polarGapCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  startPreflightReady: z.boolean(),
+  lastReceiptStage: z.enum(BRIDGE_RECEIPT_STAGES).nullable(),
+  /**
+   * BRSP target-local correlation marker. The controller uses this to prove
+   * that a status projection was produced after a specific command outcome;
+   * WebXR remains the sole owner of the experiment revision.
+   */
+  remoteCommandReceiptId: z
+    .string()
+    .min(8)
+    .max(96)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/u)
+    .nullable()
+    .optional(),
+  remoteControlEnabled: z.boolean(),
   remoteAdvanceAllowed: z.boolean(),
   remoteBackAllowed: z.boolean(),
   remoteStartAllowed: z.boolean(),
-})
+  remoteAbortAllowed: z.boolean(),
+  remoteFinalizeAllowed: z.boolean(),
+  remoteExportAllowed: z.boolean(),
+}).strict()
 
 export type CompanionStatus = z.infer<typeof CompanionStatusSchema>
 
@@ -76,6 +149,8 @@ export const CompanionMessageSchema = z.discriminatedUnion('kind', [
     accepted: z.boolean(),
     code: z.string().min(1).max(80),
     message: z.string().max(240),
+    stage: z.enum(BRIDGE_RECEIPT_STAGES).optional(),
+    resultingRevision: z.number().int().nonnegative().optional(),
   }),
 ])
 
@@ -116,13 +191,18 @@ function randomToken(byteLength: number): string {
   return toBase64Url(randomBytes(byteLength)).toLowerCase().replaceAll('-', '_')
 }
 
-export function createPairingDescriptor(forceTurn = false): PairingDescriptor {
+export function createPairingDescriptor(
+  forceTurn = false,
+  relay?: RelayDescriptor,
+): PairingDescriptor {
   return {
-    version: 1,
+    version: 2,
+    controlProtocol: 'brsp/1',
     room: `s6_${randomToken(18)}`,
     streamId: `s6xr_${randomToken(18)}`,
     key: toBase64Url(randomBytes(32)),
     forceTurn,
+    ...(relay ? { relay: RelayDescriptorSchema.parse(relay) } : {}),
   }
 }
 
@@ -133,7 +213,7 @@ export function encodePairingDescriptor(descriptor: PairingDescriptor): string {
 
 export function decodePairingDescriptor(fragment: string): PairingDescriptor {
   const encoded = fragment.replace(/^#(?:pair=)?/u, '')
-  if (encoded.length < 1 || encoded.length > 1_024) {
+  if (encoded.length < 1 || encoded.length > 2_048) {
     throw new Error('Pairing descriptor has an invalid length.')
   }
   const text = new TextDecoder('utf-8', { fatal: true }).decode(fromBase64Url(encoded))

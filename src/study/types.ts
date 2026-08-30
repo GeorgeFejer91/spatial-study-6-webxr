@@ -35,6 +35,7 @@ export const EXPERIMENT_PAGES = [
   "emotion_representation_vas",
   "hand_embodiment",
   "technical_hold",
+  "aborted",
   "complete",
 ] as const
 export type ExperimentPage = (typeof EXPERIMENT_PAGES)[number]

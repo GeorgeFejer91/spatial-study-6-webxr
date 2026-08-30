@@ -198,4 +198,35 @@ describe("Study 6 web reducer", () => {
     expect(recovered.page).toBe("stimulus")
     expect(recovered.media).toMatchObject({ status: "paused", positionMs: 4_200 })
   })
+
+  it("makes an operator abort a durable WebXR terminal state", () => {
+    let state = startedState()
+    state = apply(state, {
+      type: "start_block",
+      startedAtUtc: "2026-08-29T20:00:00Z",
+    })
+
+    state = apply(state, {
+      type: "abort_session",
+      reason: "remote_operator_abort",
+      abortedAtUtc: "2026-08-29T20:00:02Z",
+    })
+
+    expect(state).toMatchObject({
+      page: "aborted",
+      finalizedAtUtc: "2026-08-29T20:00:02Z",
+      technicalHoldReason: "remote_operator_abort",
+      media: { status: "paused" },
+    })
+    expect(state.eligibilityBlockers).toContain("session_aborted")
+    expect(state.eligibilityBlockers).not.toContain("session_incomplete")
+    expect(validateExperimentState(state)).toEqual([])
+    expect(
+      reduceStudy(state, {
+        type: "abort_session",
+        reason: "duplicate_abort",
+        abortedAtUtc: "2026-08-29T20:00:03Z",
+      }),
+    ).toMatchObject({ accepted: false, code: "abort_not_allowed" })
+  })
 })

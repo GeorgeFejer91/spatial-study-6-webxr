@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Object3D } from 'three'
 
+import type { PolarStatusProjection } from '../bridge/index.ts'
 import {
   createInitialExperimentState,
   emptyAssessmentDraft,
@@ -60,7 +61,11 @@ function actions(): StudyPanelActions {
   }
 }
 
-function render(page: ExperimentPage, mutate?: (state: ExperimentState) => void) {
+function render(
+  page: ExperimentPage,
+  mutate?: (state: ExperimentState) => void,
+  polar?: PolarStatusProjection,
+) {
   const panel = new SpatialStudyPanel()
   panels.push(panel)
   const state = questionnaireState(page)
@@ -69,6 +74,7 @@ function render(page: ExperimentPage, mutate?: (state: ExperimentState) => void)
     usedParticipantIds: [],
     localMessage: '',
     storageHealthy: true,
+    polar,
   })
   return panel
 }
@@ -81,7 +87,7 @@ afterEach(() => {
 describe('pinned native questionnaire authority', () => {
   it('locks the WebXR projection to the native source revision and frame', () => {
     expect(QUESTIONNAIRE_VISUAL_AUTHORITY.sourceRevision).toBe(
-      'dd41646e02e4a1d73b990626b74048d34ce8f26a',
+      '384935890d8ba29a2851002163352019d65768f6',
     )
     expect(QUESTIONNAIRE_VISUAL_CONTRACT.panel).toMatchObject({
       width: 1080,
@@ -228,6 +234,36 @@ describe('questionnaire page composition and gating', () => {
     expect(property(panel.body, 'paddingTop')).toBe(4)
     expect(property(panel.footer, 'height')).toBe(0)
     expect(named(panel.body, 'study6-demographics-polar-status')).toBeDefined()
+    expect(named(panel.body, 'study6-polar-waveform-empty')).toBeDefined()
+  })
+
+  it('projects only real APK ECG samples into the live demographics waveform', () => {
+    const polar: PolarStatusProjection = {
+      phase: 'streaming',
+      ready: true,
+      readinessReason: 'ready',
+      heartRateBpm: 64,
+      rrIntervalCount: 12,
+      ecgSampleRateHz: 130,
+      ecgSampleCount: 3_900,
+      lastSampleAgeMs: 18,
+      stableDurationMs: 30_000,
+      previewKind: 'real_samples',
+      waveformMicrovolts: [-20, -10, 4, 80, -44, -12, 0, 8],
+      writer: {
+        phase: 'recording',
+        healthy: true,
+        queueDepth: 0,
+        storageFreeBytes: 2_000_000_000,
+      },
+      reconnectCount: 0,
+      gapCount: 0,
+    }
+    const panel = render('demographics', undefined, polar)
+    const status = named(panel.body, 'study6-demographics-polar-status')
+    expect(property(status, 'backgroundColor')).toBe(STUDY_UI_COLORS.successSoft)
+    expect(named(panel.body, 'study6-polar-waveform-real').children).toHaveLength(8)
+    expect(panel.body.getObjectByName('study6-polar-waveform-empty')).toBeUndefined()
   })
 
   it('keeps SAM navigation in the footer with no Back button', () => {
@@ -266,5 +302,33 @@ describe('questionnaire page composition and gating', () => {
     expect(named(panel.body, 'study6-hand-agency-choices').children).toHaveLength(7)
     expect(property(named(panel.footer, 'study6-questionnaire-back'), 'width')).toBe(150)
     expect(property(named(panel.footer, 'study6-questionnaire-next'), 'width')).toBe(230)
+  })
+
+  it('keeps the block start control disabled until the APK preflight is ready', () => {
+    const panel = new SpatialStudyPanel()
+    panels.push(panel)
+    const state = questionnaireState('block_ready')
+    state.blocks = [
+      {
+        blockOrder: 1,
+        conditionId: 'HC_HE',
+        mediaId: 'Hand_HC_HE',
+        videoFile: 'Hand_HC_HE.mp4',
+        audioVariantId: 'V01',
+        audioFile: 'study6_neutral_hand_audio_V01_EN.mp3',
+        permutationId: 'perm_01',
+        blockId: 'block-1',
+        attemptId: 'attempt-1',
+        status: 'pending',
+        questionnaire: null,
+      },
+    ]
+    new StudyPanelRenderer(panel, actions()).render(state, {
+      usedParticipantIds: [],
+      localMessage: '',
+      storageHealthy: true,
+      startPreflightReady: false,
+    })
+    expect(property(named(panel.body, 'study6-block-start'), 'pointerEvents')).toBe('none')
   })
 })

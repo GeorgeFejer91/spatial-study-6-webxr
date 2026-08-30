@@ -16,17 +16,18 @@
         <p class="eyebrow">Operator companion · test-only</p>
         <h1 id="page-title">Spatial Study 6</h1>
         <p class="lede">
-          A volatile, encrypted peer connection can show the headset spectator view and send only
-          the study commands listed below. This page never records the video.
+          A volatile WebRTC peer can show the headset spectator view. BRSP/1 mutually authenticates
+          the browser peers, scopes commands, and synchronizes authoritative WebXR status. This page
+          never records the video.
         </p>
       </header>
 
       <section class="pair-card" aria-labelledby="pair-title">
         <div>
           <h2 id="pair-title">Pair with headset</h2>
-          <p id="pairing-summary">Open the one-time companion link shown by the experiment.</p>
+          <p id="pairing-summary">Open the session pairing link shown by the experiment.</p>
         </div>
-        <label class="pair-input-label" for="pair-input">One-time link or pairing code</label>
+        <label class="pair-input-label" for="pair-input">Session link or pairing code</label>
         <div class="pair-row">
           <input id="pair-input" type="password" autocomplete="off" spellcheck="false" />
           <button id="apply-pair" class="secondary" type="button">Apply</button>
@@ -41,8 +42,9 @@
           <p>
             Pairing contacts VDO.Ninja’s public signaling and STUN/TURN infrastructure. A direct
             WebRTC route can disclose peer IP addresses. The live spectator image may contain text
-            the participant entered. Use only with an authorized operator and stop pairing before
-            leaving the headset unattended.
+            the participant entered. The link can reconnect one controller at a time while this
+            headset pairing session remains enabled. Use only with an authorized operator and stop
+            pairing before leaving the headset unattended.
           </p>
         </details>
       </section>
@@ -68,7 +70,7 @@
       <section class="control-card" aria-labelledby="control-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Bounded control channel</p>
+            <p class="eyebrow">BRSP/1 scoped control channel</p>
             <h2 id="control-title">Operator commands</h2>
           </div>
         </div>
@@ -80,11 +82,19 @@
           <button type="button" data-command="resume_media" disabled>Resume media</button>
           <button type="button" data-command="back" disabled>Back</button>
           <button type="button" data-command="advance" disabled>Advance</button>
+          <button type="button" data-command="reconnect_sensor" disabled>Reconnect H10</button>
+          <button type="button" data-command="return_to_experiment" disabled>Return to experiment</button>
+          <button type="button" data-command="request_export" disabled>Prepare ECG export on headset</button>
+          <button type="button" data-command="finalize_session" disabled>Finalize ECG recording</button>
+          <button class="danger-outline" type="button" data-command="abort_session" disabled>Abort session</button>
         </div>
         <p class="fine-print">
-          Commands are authenticated, acknowledged, and rejected unless the experiment’s reducer
-          allows them. The companion cannot enter participant data, answer questionnaires, grant
-          consent, start immersive VR, export records, or erase local data.
+          Commands use BRSP mutual proof, negotiated scopes, revision fencing, and applied
+          acknowledgements. They are rejected unless the experiment’s reducer
+          allows them. WebXR owns questionnaire and condition control; sensor export and recording
+          finalization are bounded requests to the APK recorder. Records never traverse this
+          channel. The companion cannot enter participant data, answer
+          questionnaires, grant consent, start immersive VR, or erase local data.
         </p>
         <p id="command-result" class="state" role="status">No command sent.</p>
       </section>
@@ -92,17 +102,45 @@
       <section class="status-card" aria-labelledby="status-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Non-identifying telemetry</p>
+            <p class="eyebrow">Privacy-minimized operational telemetry</p>
             <h2 id="status-title">Study status</h2>
           </div>
         </div>
+        <p class="fine-print">
+          This status channel includes language, participant-active state, condition and block,
+          media timing, heart rate, ECG counters, and recorder health. It excludes participant
+          names/IDs, demographics, questionnaire answers, and raw ECG samples.
+        </p>
         <dl id="study-status" class="status-grid">
           <div><dt>Phase</dt><dd data-field="phase">—</dd></div>
           <div><dt>View</dt><dd data-field="route">—</dd></div>
+          <div><dt>Language</dt><dd data-field="language">—</dd></div>
+          <div><dt>Immersive session</dt><dd data-field="xr-presenting">—</dd></div>
+          <div><dt>Participant state</dt><dd data-field="participant-active">—</dd></div>
           <div><dt>Block</dt><dd data-field="block">—</dd></div>
           <div><dt>Condition</dt><dd data-field="condition">—</dd></div>
           <div><dt>Media</dt><dd data-field="media">—</dd></div>
           <div><dt>Storage</dt><dd data-field="storage">—</dd></div>
+          <div><dt>Authority</dt><dd data-field="authority">—</dd></div>
+          <div><dt>Remote control</dt><dd data-field="remote-control">—</dd></div>
+          <div><dt>Negotiated scopes</dt><dd data-field="scopes">—</dd></div>
+          <div><dt>APK bridge</dt><dd data-field="bridge">—</dd></div>
+          <div><dt>Polar H10</dt><dd data-field="sensor">—</dd></div>
+          <div><dt>Readiness</dt><dd data-field="sensor-reason">—</dd></div>
+          <div><dt>Heart rate</dt><dd data-field="heart-rate">—</dd></div>
+          <div><dt>ECG</dt><dd data-field="ecg">—</dd></div>
+          <div><dt>Last ECG sample</dt><dd data-field="sample-age">—</dd></div>
+          <div><dt>APK recorder</dt><dd data-field="recording">—</dd></div>
+          <div><dt>Recorder revision</dt><dd data-field="recording-revision">—</dd></div>
+          <div><dt>Experiment markers</dt><dd data-field="recording-markers">—</dd></div>
+          <div><dt>Recorded ECG samples</dt><dd data-field="recording-samples">—</dd></div>
+          <div><dt>Dropped ECG batches</dt><dd data-field="recording-drops">—</dd></div>
+          <div><dt>Recording artifact</dt><dd data-field="recording-artifact">—</dd></div>
+          <div><dt>Recording durability</dt><dd data-field="recording-durable">—</dd></div>
+          <div><dt>ECG writer</dt><dd data-field="writer-health">—</dd></div>
+          <div><dt>Gaps</dt><dd data-field="gaps">—</dd></div>
+          <div><dt>Start preflight</dt><dd data-field="preflight">—</dd></div>
+          <div><dt>Last effect receipt</dt><dd data-field="receipt">—</dd></div>
         </dl>
       </section>
     </main>

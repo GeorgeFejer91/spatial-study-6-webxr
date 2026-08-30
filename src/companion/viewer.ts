@@ -1,55 +1,76 @@
+import type { BridgeReceiptStage } from '../bridge/contract.ts'
 import {
-  decryptCompanionMessage,
-  encryptCompanionMessage,
-  EncryptedEnvelopeSchema,
-  nowIso,
-  ReplayWindow,
-  SequenceReplayGuard,
-  type CompanionMessage,
-  type CompanionStatus,
-  type PairingDescriptor,
-  type RemoteCommandName,
-} from './protocol'
+  remoteCommandToBrsp,
+  STUDY6_BRSP_CAPABILITIES,
+  STUDY6_BRSP_SCOPES,
+  Study6BrspCommandResultSchema,
+  study6BrspState,
+} from './brsp-study6.ts'
+import { Study6BrspVdoPeerTransport } from './brsp-vdo-peer-transport.ts'
+import type {
+  CompanionStatus,
+  PairingDescriptor,
+  RemoteCommandName,
+} from './protocol.ts'
+import {
+  BRSPConnection,
+  BRSP_STALE_MS,
+  type BRSPAppliedBody,
+  type JsonValue,
+} from './vendor/browser-remote-sync-protocol/brsp.js'
 import {
   createVdoSdk,
   eventDetail,
   loadVdoNinjaSdk,
-  type VdoChannelDetail,
-  type VdoDataDetail,
   type VdoNinjaSdk,
   type VdoTrackDetail,
-} from './vdo-sdk'
+} from './vdo-sdk.ts'
 
 export interface CommandAcknowledgement {
   commandId: string
   accepted: boolean
   code: string
   message: string
+  stage?: BridgeReceiptStage
+  /** Effective WebXR experiment revision, never the APK recorder revision. */
+  resultingRevision?: number
 }
 
 export interface CompanionViewerSnapshot {
   phase: 'idle' | 'connecting' | 'connected' | 'error'
   message: string
   peerConnected: boolean
+  controlProtocol: 'brsp/1'
+  acceptedScopes: string[]
+  stateStale: boolean
+  commandGateBlocked: boolean
 }
 
 function detailEvent<T>(type: string, detail: T): CustomEvent<T> {
   return new CustomEvent(type, { detail })
 }
 
+/** Phone/PC BRSP controller for the WebXR experiment target. */
 export class CompanionViewer extends EventTarget {
   private readonly descriptor: PairingDescriptor
   private sdk: VdoNinjaSdk | null = null
-  private channelUuid: string | null = null
-  private peerUuid: string | null = null
+  private transport: Study6BrspVdoPeerTransport | null = null
+  private brsp: BRSPConnection<JsonValue> | null = null
   private phase: CompanionViewerSnapshot['phase'] = 'idle'
   private message = ''
-  private sequence = 0
   private latestRevision = 0
-  private readonly replay = new ReplayWindow()
-  private readonly sequenceGuard = new SequenceReplayGuard()
-  private receiveChain: Promise<void> = Promise.resolve()
-  private sendChain: Promise<void> = Promise.resolve()
+  private awaitingStatusCommandId: string | null = null
+  private latestStatusCommandId: string | null = null
+  private outcomeUnknown = false
+  private hasFreshStatus = false
+  private readonly pendingCommands = new Map<
+    string,
+    { name: RemoteCommandName; timer: number; timedOut: boolean }
+  >()
+  private stateStale = false
+  private staleTimer: number | undefined
+  private authenticationTimer: number | undefined
+  private tearingDown = false
 
   constructor(descriptor: PairingDescriptor) {
     super()
@@ -57,32 +78,58 @@ export class CompanionViewer extends EventTarget {
   }
 
   snapshot(): CompanionViewerSnapshot {
+    const brsp = this.brsp?.snapshot()
     return {
       phase: this.phase,
       message: this.message,
-      peerConnected: this.peerUuid !== null,
+      peerConnected: brsp?.phase === 'ready',
+      controlProtocol: 'brsp/1',
+      acceptedScopes: brsp?.acceptedScopes ?? [],
+      stateStale: this.stateStale,
+      commandGateBlocked:
+        !this.hasFreshStatus
+        || this.stateStale
+        || this.awaitingStatusCommandId !== null
+        || this.outcomeUnknown,
     }
   }
 
   async connect(): Promise<void> {
     await this.stop()
+    this.tearingDown = false
     this.phase = 'connecting'
-    this.message = 'Connecting to the headset…'
+    this.message = 'Connecting to the headset spectator stream and BRSP target…'
     this.emitState()
     try {
       const Constructor = await loadVdoNinjaSdk()
-      this.sdk = createVdoSdk(Constructor, this.descriptor.forceTurn, this.descriptor.key)
-      this.attachListeners(this.sdk)
-      await this.sdk.connect()
-      await this.sdk.joinRoom({ room: this.descriptor.room })
-      await this.sdk.view(this.descriptor.streamId, {
+      const sdk = createVdoSdk(Constructor, this.descriptor.forceTurn, this.descriptor.key)
+      this.sdk = sdk
+      this.attachMediaListeners(sdk)
+      const transport = new Study6BrspVdoPeerTransport({
+        sdk,
+        role: 'controller',
+        streamId: this.descriptor.streamId,
+      })
+      this.transport = transport
+      transport.start()
+      this.brsp = this.createControllerConnection(transport)
+      await sdk.connect()
+      await sdk.joinRoom({ room: this.descriptor.room })
+      await sdk.view(this.descriptor.streamId, {
         audio: false,
         video: true,
-        label: 'Spatial Study 6 companion',
+        label: 'Spatial Study 6 BRSP companion',
       })
-      this.phase = 'connected'
-      this.message = 'Waiting for the headset video and control channel…'
-      this.emitState()
+      if (this.brsp.phase !== 'ready') {
+        this.message = 'Spectator peer opened; waiting for BRSP mutual authentication…'
+        this.authenticationTimer = window.setTimeout(() => {
+          if (this.brsp?.phase === 'ready' || this.tearingDown) return
+          this.phase = 'error'
+          this.message = 'BRSP authentication timed out; confirm the pairing link and try Connect again.'
+          this.emitState()
+        }, 10_000)
+        this.emitState()
+      }
     } catch (error) {
       this.phase = 'error'
       this.message = error instanceof Error ? error.message : String(error)
@@ -93,144 +140,235 @@ export class CompanionViewer extends EventTarget {
   }
 
   async stop(): Promise<void> {
+    this.tearingDown = true
     await this.disconnect()
     this.phase = 'idle'
     this.message = ''
+    this.stateStale = false
     this.emitState()
-  }
-
-  private async disconnect(): Promise<void> {
-    const sdk = this.sdk
-    this.sdk = null
-    if (sdk) await Promise.resolve(sdk.disconnect()).catch(() => undefined)
-    this.channelUuid = null
-    this.peerUuid = null
   }
 
   async sendCommand(name: RemoteCommandName): Promise<string> {
-    if (!this.sdk || !this.peerUuid) throw new Error('The headset control channel is not connected.')
-    const commandId = crypto.randomUUID()
-    const message = {
-      protocol: 'spatial-study-6-companion/v1',
-      kind: 'command',
-      sequence: this.sequence++,
-      sentAt: nowIso(),
-      commandId,
-      name,
+    const connection = this.brsp
+    if (!connection || connection.phase !== 'ready') {
+      throw new Error('The authenticated BRSP control channel is not ready.')
+    }
+    if (name !== 'request_status' && !this.hasFreshStatus) {
+      throw new Error('Waiting for the first authoritative WebXR status from this connection.')
+    }
+    if (name !== 'request_status' && this.stateStale) {
+      throw new Error('Authoritative WebXR status is stale; refresh status before another command.')
+    }
+    if (name !== 'request_status' && this.awaitingStatusCommandId !== null) {
+      throw new Error('Waiting for the authoritative WebXR state after the previous command.')
+    }
+    if (name !== 'request_status' && this.outcomeUnknown) {
+      throw new Error('A previous command outcome is unknown; refresh authoritative status first.')
+    }
+    const route = remoteCommandToBrsp(name)
+    const commandId = connection.sendCommand(route.scope, route.action, {}, {
       expectedRevision: this.latestRevision,
-    } as const
-    await this.queueSend(message, this.peerUuid)
-    return commandId
+    })
+    const timer = window.setTimeout(() => {
+      const pending = this.pendingCommands.get(commandId)
+      if (!pending || pending.timedOut) return
+      pending.timedOut = true
+      this.outcomeUnknown = true
+      this.dispatchEvent(detailEvent<CommandAcknowledgement>('ack', {
+        commandId,
+        accepted: false,
+        code: 'outcome_unknown',
+        message: 'No applied receipt arrived; refresh authoritative status before another command.',
+      }))
+      this.emitState()
+    }, 8_000)
+    this.pendingCommands.set(commandId, { name, timer, timedOut: false })
+    return Promise.resolve(commandId)
   }
 
-  private attachListeners(sdk: VdoNinjaSdk): void {
-    sdk.addEventListener('dataChannelOpen', (event) => {
-      const detail = eventDetail<VdoChannelDetail>(event)
-      if (!detail.uuid || detail.type !== 'viewer') return
-      this.channelUuid = detail.uuid
-      this.peerUuid = null
-      this.message = 'Control channel connected; authenticating the headset…'
-      this.emitState()
-      void this.sendHello().catch((error: unknown) => this.reportTransportError(error))
+  private createControllerConnection(
+    transport: Study6BrspVdoPeerTransport,
+  ): BRSPConnection<JsonValue> {
+    const connection = new BRSPConnection<JsonValue>({
+      transport,
+      role: 'controller',
+      sessionId: this.descriptor.room,
+      sharedSecret: this.descriptor.key,
+      peerId: `controller_${crypto.randomUUID()}`,
+      capabilities: [...STUDY6_BRSP_CAPABILITIES],
+      requestedScopes: [...STUDY6_BRSP_SCOPES],
     })
-    sdk.addEventListener('dataChannelClose', (event) => {
-      const detail = eventDetail<VdoChannelDetail>(event)
-      if (detail.type !== 'viewer' || detail.uuid !== this.channelUuid) return
-      this.channelUuid = null
-      this.peerUuid = null
-      this.message = 'The headset control channel closed.'
+    connection.addEventListener('phasechange', (event) => {
+      if (this.tearingDown) return
+      if (event.detail.phase === 'authenticating') {
+        this.message = 'BRSP transport connected; verifying mutual proof…'
+      } else if (event.detail.phase === 'ready') {
+        this.phase = 'connected'
+        this.message = 'BRSP mutual proof verified; authoritative status is synchronized.'
+      } else if (event.detail.phase === 'disconnected') {
+        this.phase = 'error'
+        this.message = 'The BRSP target disconnected; select Connect to authenticate a fresh epoch.'
+      } else if (event.detail.phase === 'error') {
+        this.phase = 'error'
+        this.message = `BRSP protocol error: ${event.detail.message}`
+      }
       this.emitState()
     })
+    connection.addEventListener('ready', () => {
+      if (this.authenticationTimer !== undefined) window.clearTimeout(this.authenticationTimer)
+      this.authenticationTimer = undefined
+      this.phase = 'connected'
+      this.stateStale = false
+      this.message = 'BRSP mutual proof verified; waiting for authoritative status…'
+      this.startStaleMonitor()
+      this.emitState()
+    })
+    connection.addEventListener('snapshot', (event) => {
+      this.acceptStatus(event.detail.state, event.detail.revision)
+    })
+    connection.addEventListener('state', (event) => {
+      this.acceptStatus(event.detail.state, event.detail.revision)
+    })
+    connection.addEventListener('commandapplied', (event) => {
+      this.acceptApplied(event.detail)
+    })
+    connection.addEventListener('protocolerror', (event) => {
+      if (this.tearingDown) return
+      this.phase = 'error'
+      this.message = `BRSP rejected the session: ${event.detail.message}`
+      this.emitState()
+    })
+    return connection
+  }
+
+  private acceptStatus(value: JsonValue, envelopeRevision: number): void {
+    let status: CompanionStatus
+    try {
+      status = study6BrspState(value)
+    } catch {
+      this.phase = 'error'
+      this.message = 'The headset sent a status object outside the Study 6 schema.'
+      this.emitState()
+      return
+    }
+    if (status.revision !== envelopeRevision) {
+      this.phase = 'error'
+      this.message = 'The BRSP envelope and WebXR status revisions disagree.'
+      this.emitState()
+      return
+    }
+    if (status.revision < this.latestRevision) return
+    this.hasFreshStatus = true
+    this.latestRevision = status.revision
+    this.latestStatusCommandId = status.remoteCommandReceiptId ?? null
+    if (
+      this.awaitingStatusCommandId !== null
+      && this.latestStatusCommandId === this.awaitingStatusCommandId
+    ) {
+      this.awaitingStatusCommandId = null
+    }
+    this.stateStale = false
+    this.message = 'Authenticated BRSP control and live status are synchronized.'
+    this.dispatchEvent(detailEvent<CompanionStatus>('status', status))
+    this.emitState()
+  }
+
+  private acceptApplied(applied: BRSPAppliedBody): void {
+    const pending = this.pendingCommands.get(applied.commandId)
+    if (!pending) {
+      this.phase = 'error'
+      this.message = 'The BRSP target sent an applied receipt for an unknown command.'
+      this.outcomeUnknown = true
+      this.emitState()
+      return
+    }
+    const result = Study6BrspCommandResultSchema.safeParse(applied.result)
+    if (!result.success) {
+      window.clearTimeout(pending.timer)
+      this.pendingCommands.delete(applied.commandId)
+      this.outcomeUnknown = true
+      this.dispatchEvent(detailEvent<CommandAcknowledgement>('ack', {
+        commandId: applied.commandId,
+        accepted: false,
+        code: 'invalid_applied_result',
+        message: 'The target acknowledgement did not match the Study 6 result schema.',
+        resultingRevision: applied.revision,
+      }))
+      this.emitState()
+      return
+    }
+    window.clearTimeout(pending.timer)
+    this.pendingCommands.delete(applied.commandId)
+    if (pending.name === 'request_status') this.outcomeUnknown = false
+    // Keep relative/destructive controls closed until a state projection
+    // explicitly names this command. WebXR and sensor-only effects can retain
+    // the same experiment revision, and the latest-state lane is unordered, so
+    // revision equality alone cannot prove post-command synchronization.
+    this.awaitingStatusCommandId = this.latestStatusCommandId === applied.commandId
+      ? null
+      : applied.commandId
+    this.dispatchEvent(detailEvent<CommandAcknowledgement>('ack', {
+      commandId: applied.commandId,
+      accepted: applied.ok,
+      code: result.data.code,
+      message: result.data.message,
+      ...(result.data.stage ? { stage: result.data.stage } : {}),
+      resultingRevision: applied.revision,
+    }))
+    this.emitState()
+  }
+
+  private attachMediaListeners(sdk: VdoNinjaSdk): void {
     sdk.addEventListener('track', (event) => {
       const detail = eventDetail<VdoTrackDetail>(event)
       if (detail.streamID && detail.streamID !== this.descriptor.streamId) return
-      const stream = detail.streams?.[0] ?? (detail.track ? new MediaStream([detail.track]) : undefined)
+      const stream = detail.streams?.[0]
+        ?? (detail.track ? new MediaStream([detail.track]) : undefined)
       if (stream) this.dispatchEvent(detailEvent('stream', stream))
     })
-    sdk.addEventListener('dataReceived', (event) => {
-      const detail = eventDetail<VdoDataDetail>(event)
-      if (!detail.uuid || detail.uuid !== this.channelUuid) return
-      this.receiveChain = this.receiveChain
-        .catch(() => undefined)
-        .then(() => this.receive(detail))
-        .catch((error: unknown) => this.reportTransportError(error))
-    })
     sdk.addEventListener('error', (event) => {
+      if (this.tearingDown) return
       const detail = eventDetail<{ error?: unknown }>(event)
-      this.message = detail.error instanceof Error ? detail.error.message : String(detail.error ?? 'Transport error')
+      this.message = detail.error instanceof Error
+        ? detail.error.message
+        : String(detail.error ?? 'VDO.Ninja transport error')
       this.emitState()
     })
   }
 
-  private async sendHello(): Promise<void> {
-    if (!this.sdk || !this.channelUuid) return
-    await this.queueSend({
-      protocol: 'spatial-study-6-companion/v1',
-      kind: 'hello',
-      role: 'companion',
-      sequence: this.sequence++,
-      sentAt: nowIso(),
-    }, this.channelUuid)
-  }
-
-  private async receive(detail: VdoDataDetail): Promise<void> {
-    if (!this.sdk || detail.uuid !== this.channelUuid) return
-    const envelope = EncryptedEnvelopeSchema.safeParse(detail.data)
-    if (!envelope.success || !this.replay.accept(envelope.data)) return
-    let message: CompanionMessage
-    try {
-      message = await decryptCompanionMessage(this.descriptor.key, envelope.data)
-    } catch {
-      // Authentication, schema, and decoding failures are deliberately silent.
-      return
-    }
-    if (!this.sdk || detail.uuid !== this.channelUuid) return
-    if (!this.sequenceGuard.accept(message)) return
-    if (message.kind === 'hello') {
-      if (message.role !== 'experiment' || !detail.uuid) return
-      this.peerUuid = detail.uuid
-      this.message = 'Secure control channel connected.'
+  private startStaleMonitor(): void {
+    if (this.staleTimer !== undefined) window.clearInterval(this.staleTimer)
+    this.staleTimer = window.setInterval(() => {
+      const stale = this.brsp?.isStateStale(performance.now(), BRSP_STALE_MS) ?? false
+      if (stale === this.stateStale) return
+      this.stateStale = stale
+      this.message = stale
+        ? 'BRSP is connected, but authoritative status is stale.'
+        : 'Authenticated BRSP control and live status are synchronized.'
       this.emitState()
-      await this.sendCommand('request_status')
-    } else if (!this.peerUuid || detail.uuid !== this.peerUuid) {
-      return
-    } else if (message.kind === 'status') {
-      this.latestRevision = message.status.revision
-      this.dispatchEvent(detailEvent<CompanionStatus>('status', message.status))
-    } else if (message.kind === 'ack') {
-      this.dispatchEvent(
-        detailEvent<CommandAcknowledgement>('ack', {
-          commandId: message.commandId,
-          accepted: message.accepted,
-          code: message.code,
-          message: message.message,
-        }),
-      )
-    }
+    }, 500)
   }
 
-  private queueSend(message: Parameters<typeof encryptCompanionMessage>[1], uuid: string): Promise<void> {
-    const next = this.sendChain
-      .catch(() => undefined)
-      .then(async () => {
-        const sdk = this.sdk
-        if (!sdk || (uuid !== this.channelUuid && uuid !== this.peerUuid)) {
-          throw new Error('The headset control channel is no longer connected.')
-        }
-        const envelope = await encryptCompanionMessage(this.descriptor.key, message)
-        if (this.sdk !== sdk || (uuid !== this.channelUuid && uuid !== this.peerUuid)) {
-          throw new Error('The headset control channel closed before the message was ready.')
-        }
-        const sent = sdk.sendData(envelope, { uuid, preference: 'viewer' })
-        if (!sent) throw new Error('The message could not be queued on the peer channel.')
-      })
-    this.sendChain = next
-    return next
-  }
-
-  private reportTransportError(error: unknown): void {
-    this.message = error instanceof Error ? error.message : String(error)
-    this.emitState()
+  private async disconnect(): Promise<void> {
+    if (this.authenticationTimer !== undefined) window.clearTimeout(this.authenticationTimer)
+    this.authenticationTimer = undefined
+    if (this.staleTimer !== undefined) window.clearInterval(this.staleTimer)
+    this.staleTimer = undefined
+    const brsp = this.brsp
+    this.brsp = null
+    if (brsp) await brsp.close().catch(() => undefined)
+    this.transport?.stop()
+    this.transport = null
+    const sdk = this.sdk
+    this.sdk = null
+    if (sdk) await Promise.resolve(sdk.disconnect()).catch(() => undefined)
+    this.latestRevision = 0
+    this.hasFreshStatus = false
+    this.awaitingStatusCommandId = null
+    this.latestStatusCommandId = null
+    this.outcomeUnknown = false
+    for (const pending of this.pendingCommands.values()) window.clearTimeout(pending.timer)
+    this.pendingCommands.clear()
   }
 
   private emitState(): void {

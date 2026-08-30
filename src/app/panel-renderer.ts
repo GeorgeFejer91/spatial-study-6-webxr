@@ -1,6 +1,11 @@
 import { Container, Text } from '@pmndrs/uikit'
 
 import {
+  disconnectedPolarStatus,
+  polarProjectionIsReady,
+  type PolarStatusProjection,
+} from '../bridge/index.ts'
+import {
   availableParticipantIds,
   conditionDescriptionKey,
   formatStudyText,
@@ -88,6 +93,8 @@ export interface StudyPanelRenderContext {
   usedParticipantIds: readonly string[]
   localMessage: string
   storageHealthy: boolean
+  polar?: PolarStatusProjection
+  startPreflightReady?: boolean
 }
 
 export class StudyPanelRenderer {
@@ -148,10 +155,10 @@ export class StudyPanelRenderer {
         this.renderParticipant(state, context.usedParticipantIds)
         break
       case 'demographics':
-        this.renderDemographics(language)
+        this.renderDemographics(language, context.polar ?? disconnectedPolarStatus())
         break
       case 'block_ready':
-        this.renderBlockReady(state, language)
+        this.renderBlockReady(state, language, context.startPreflightReady ?? true)
         break
       case 'self_assessment_manikin':
         this.renderSam(state, language)
@@ -167,6 +174,9 @@ export class StudyPanelRenderer {
         break
       case 'technical_hold':
         this.panel.replaceBody(paragraph(studyText(language, 'technical_hold.body'), { size: 28 }))
+        break
+      case 'aborted':
+        this.renderAborted(language)
         break
       case 'complete':
         this.renderComplete(language)
@@ -292,10 +302,18 @@ export class StudyPanelRenderer {
     this.panel.replaceBody(body)
   }
 
-  private renderDemographics(language: LanguageCode): void {
+  private renderDemographics(language: LanguageCode, polar: PolarStatusProjection): void {
     let refreshValidity = () => undefined
     const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 0 })
     body.name = 'study6-demographics'
+
+    const ready = polarProjectionIsReady(polar)
+    const statusColor = ready
+      ? STUDY_UI_COLORS.success
+      : polar.phase === 'fault'
+        ? STUDY_UI_COLORS.danger
+        : STUDY_UI_COLORS.warning
+    const statusBackground = ready ? STUDY_UI_COLORS.successSoft : STUDY_UI_COLORS.warningSoft
 
     const polarStatus = new Container({
       width: '100%',
@@ -308,8 +326,8 @@ export class StudyPanelRenderer {
       paddingBottom: 8,
       paddingLeft: 10,
       marginBottom: 6,
-      backgroundColor: STUDY_UI_COLORS.warningSoft,
-      borderColor: STUDY_UI_COLORS.warning,
+      backgroundColor: statusBackground,
+      borderColor: statusColor,
       borderWidth: 1,
       borderRadius: 8,
     })
@@ -319,15 +337,12 @@ export class StudyPanelRenderer {
         width: 18,
         height: 18,
         marginRight: 10,
-        backgroundColor: STUDY_UI_COLORS.warning,
+        backgroundColor: statusColor,
         borderRadius: 9,
       }),
       new Text({
         flexGrow: 1,
-        text:
-          language === 'de'
-            ? 'Polar H10\nIn WebXR nicht verfugbar | keine BLE-Datenerfassung'
-            : 'Polar H10\nUnavailable in WebXR | no BLE data collection',
+        text: this.polarStatusText(language, polar, ready),
         color: STUDY_UI_COLORS.text,
         fontSize: 14,
         fontWeight: 'bold',
@@ -339,20 +354,14 @@ export class StudyPanelRenderer {
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: '#ffffffb8',
-        borderColor: STUDY_UI_COLORS.warning,
+        borderColor: statusColor,
         borderWidth: 1,
         borderRadius: 8,
       }),
     )
     const waveform = polarStatus.children[2] as Container
-    waveform.add(
-      new Text({
-        text: 'NO BLE',
-        color: STUDY_UI_COLORS.textMuted,
-        fontSize: 12,
-        fontWeight: 'bold',
-      }),
-    )
+    waveform.name = 'study6-polar-waveform'
+    this.renderPolarWaveform(waveform, polar, statusColor, language)
     body.add(polarStatus)
 
     const title = new Container({
@@ -498,7 +507,7 @@ export class StudyPanelRenderer {
         width: 528,
         changed: (value) => {
           this.demographics.handedness = value
-          this.renderDemographics(language)
+          this.renderDemographics(language, polar)
         },
       }),
       compactChoices({
@@ -509,7 +518,7 @@ export class StudyPanelRenderer {
         width: 528,
         changed: (value) => {
           this.demographics.gender = value
-          this.renderDemographics(language)
+          this.renderDemographics(language, polar)
         },
       }),
     )
@@ -542,7 +551,7 @@ export class StudyPanelRenderer {
       pointerEvents: 'auto',
       onClick: () => {
         this.demographics.consentConfirmed = !this.demographics.consentConfirmed
-        this.renderDemographics(language)
+        this.renderDemographics(language, polar)
       },
     })
     consent.name = 'study6-demographics-consent'
@@ -635,6 +644,67 @@ export class StudyPanelRenderer {
     this.panel.hideFooter()
   }
 
+  private polarStatusText(
+    language: LanguageCode,
+    polar: PolarStatusProjection,
+    ready: boolean,
+  ): string {
+    if (ready) {
+      const hr = polar.heartRateBpm ?? 0
+      return language === 'de'
+        ? `Polar H10 ECG bereit\nHF ${hr} | ${polar.ecgSampleRateHz} Hz | ${polar.ecgSampleCount} Samples`
+        : `Polar H10 ECG ready\nHR ${hr} | ${polar.ecgSampleRateHz} Hz | ${polar.ecgSampleCount} samples`
+    }
+    const reason = (polar.readinessReason.trim() || polar.phase.replaceAll('_', ' ')).slice(0, 72)
+    return language === 'de' ? `Polar H10\nNicht bereit | ${reason}` : `Polar H10\nNot ready | ${reason}`
+  }
+
+  private renderPolarWaveform(
+    target: Container,
+    polar: PolarStatusProjection,
+    color: string,
+    language: LanguageCode,
+  ): void {
+    if (polar.previewKind !== 'real_samples' || polar.waveformMicrovolts.length === 0) {
+      const empty = new Text({
+        text: language === 'de' ? 'WARTE AUF ECHTE ECG-SAMPLES' : 'WAITING FOR REAL ECG SAMPLES',
+        color: STUDY_UI_COLORS.textMuted,
+        fontSize: 10,
+        fontWeight: 'bold',
+      })
+      empty.name = 'study6-polar-waveform-empty'
+      target.add(empty)
+      return
+    }
+
+    const maximumBars = 48
+    const step = Math.max(1, Math.ceil(polar.waveformMicrovolts.length / maximumBars))
+    const samples = polar.waveformMicrovolts.filter((_, index) => index % step === 0).slice(-maximumBars)
+    const mean = samples.reduce((sum, value) => sum + value, 0) / samples.length
+    const centered = samples.map((value) => value - mean)
+    const amplitude = Math.max(1, ...centered.map((value) => Math.abs(value)))
+    const graph = new Container({
+      width: 280,
+      height: 34,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gapColumn: 1,
+    })
+    graph.name = 'study6-polar-waveform-real'
+    centered.forEach((value, index) => {
+      const bar = new Container({
+        width: 4,
+        height: Math.max(2, Math.round((Math.abs(value) / amplitude) * 30)),
+        backgroundColor: color,
+        borderRadius: 1,
+      })
+      bar.name = `study6-polar-waveform-sample-${index}`
+      graph.add(bar)
+    })
+    target.add(graph)
+  }
+
   private demographicsValue(): Demographics | null {
     if (
       this.demographics.ageYears === undefined ||
@@ -653,10 +723,21 @@ export class StudyPanelRenderer {
     }
   }
 
-  private renderBlockReady(state: ExperimentState, language: LanguageCode): void {
+  private renderBlockReady(
+    state: ExperimentState,
+    language: LanguageCode,
+    startPreflightReady: boolean,
+  ): void {
     const block = state.blocks[state.currentBlockIndex]
     if (!block) return
     const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 24 })
+    const start = createSpatialButton({
+      label: studyText(language, 'button.begin_assessment'),
+      width: 400,
+      disabled: !startPreflightReady,
+      onActivate: () => this.actions.startBlock(),
+    }).root
+    start.name = 'study6-block-start'
     body.add(
       paragraph(
         formatStudyText(language, 'block.heading', {
@@ -680,11 +761,7 @@ export class StudyPanelRenderer {
         { size: 21, color: STUDY_UI_COLORS.textMuted },
       ),
       paragraph(studyText(language, 'block.instructions'), { size: 22 }),
-      createSpatialButton({
-        label: studyText(language, 'button.begin_assessment'),
-        width: 400,
-        onActivate: () => this.actions.startBlock(),
-      }).root,
+      start,
     )
     this.panel.replaceBody(body)
   }
@@ -906,6 +983,39 @@ export class StudyPanelRenderer {
       buttonRow(
         createSpatialButton({ label: 'Export JSON', width: 230, onActivate: () => this.actions.exportJson() }).root,
         createSpatialButton({ label: 'Export CSV', variant: 'secondary', width: 230, onActivate: () => this.actions.exportCsv() }).root,
+      ),
+      createSpatialButton({
+        label: language === 'de' ? 'Neue Sitzung' : 'Start new session',
+        variant: 'secondary',
+        width: 320,
+        onActivate: () => this.actions.startNewSession(),
+      }).root,
+    )
+    this.panel.replaceBody(body)
+  }
+
+  private renderAborted(language: LanguageCode): void {
+    const body = new Container({
+      width: '100%',
+      flexDirection: 'column',
+      gapRow: 24,
+      alignItems: 'center',
+    })
+    body.add(
+      paragraph(studyText(language, 'aborted.heading'), { size: 36, align: 'center' }),
+      paragraph(studyText(language, 'aborted.body'), { size: 25, align: 'center' }),
+      buttonRow(
+        createSpatialButton({
+          label: 'Export JSON',
+          width: 230,
+          onActivate: () => this.actions.exportJson(),
+        }).root,
+        createSpatialButton({
+          label: 'Export CSV',
+          variant: 'secondary',
+          width: 230,
+          onActivate: () => this.actions.exportCsv(),
+        }).root,
       ),
       createSpatialButton({
         label: language === 'de' ? 'Neue Sitzung' : 'Start new session',

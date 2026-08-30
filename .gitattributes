@@ -3,5 +3,8 @@
 *.mp4 binary
 *.png binary
 
-# Preserve the pinned upstream SDK byte-for-byte, including its whitespace.
-public/vendor/vdoninja/1.5.5/vdoninja-sdk.js -diff
+# Preserve exact vendored bytes used by SRI and provenance checks.
+public/vendor/vdoninja/1.5.5/vdoninja-sdk.js text eol=lf -diff
+public/vendor/vdoninja/1.5.5/LICENSE-MPL-2.0.txt text eol=lf
+public/vendor/vdoninja/1.5.5/NOTICE.md text eol=lf
+src/companion/vendor/browser-remote-sync-protocol/brsp.js text eol=lf

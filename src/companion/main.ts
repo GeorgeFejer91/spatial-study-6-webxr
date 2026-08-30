@@ -11,6 +11,7 @@ import {
   type CommandAcknowledgement,
   type CompanionViewerSnapshot,
 } from './viewer'
+import { companionCommandAllowed } from './availability'
 
 if (window.top !== window.self) {
   document.body.replaceChildren('This operator companion must be opened as a top-level page.')
@@ -55,13 +56,13 @@ function applyDescriptor(fragment: string): boolean {
   try {
     descriptor = decodePairingDescriptor(fragment)
     pairInput.value = ''
-    pairingSummary.textContent = `One-time session ${descriptor.streamId.slice(-8).toUpperCase()} is ready to connect${descriptor.forceTurn ? ' through a requested relay route' : ''}.`
+    pairingSummary.textContent = `BRSP pairing session ${descriptor.streamId.slice(-8).toUpperCase()} is ready to connect${descriptor.forceTurn ? ' through a requested relay route' : ''}. The same link can reconnect until pairing is stopped on the headset.`
     connectionState.textContent = 'Pairing accepted. Connection has not started.'
     connectButton.disabled = false
     return true
   } catch {
     descriptor = null
-    pairingSummary.textContent = 'The one-time pairing value is missing or invalid.'
+    pairingSummary.textContent = 'The session pairing value is missing or invalid.'
     connectionState.textContent = 'Not paired.'
     connectButton.disabled = true
     return false
@@ -69,19 +70,14 @@ function applyDescriptor(fragment: string): boolean {
 }
 
 function renderCommandAvailability(): void {
-  const peerConnected = viewer?.snapshot().peerConnected === true
+  const snapshot = viewer?.snapshot()
+  const peerConnected = snapshot?.peerConnected === true
   for (const button of commandButtons) {
     const name = button.dataset.command as RemoteCommandName
-    let enabled = peerConnected
-    if (name !== 'request_status' && latestStatus === null) enabled = false
-    if (name === 'start_block') enabled = enabled && latestStatus?.remoteStartAllowed === true
-    if (name === 'pause_media') {
-      enabled = enabled && latestStatus?.mediaElapsedSeconds !== null && latestStatus?.mediaPaused === false
-    }
-    if (name === 'resume_media') enabled = enabled && latestStatus?.mediaPaused === true
-    if (name === 'advance') enabled = enabled && latestStatus?.remoteAdvanceAllowed === true
-    if (name === 'back') enabled = enabled && latestStatus?.remoteBackAllowed === true
-    button.disabled = !enabled
+    button.disabled = (
+      name !== 'request_status'
+      && (snapshot?.commandGateBlocked === true || snapshot?.stateStale === true)
+    ) || !companionCommandAllowed(name, peerConnected, latestStatus)
   }
 }
 
@@ -91,7 +87,15 @@ function renderConnection(snapshot: CompanionViewerSnapshot): void {
   renderCommandAvailability()
   connectButton.disabled = snapshot.phase === 'connecting' || descriptor === null
   disconnectButton.disabled = snapshot.phase === 'idle'
-  routeBadge.textContent = connected ? 'Peer connected' : snapshot.phase === 'connecting' ? 'Connecting' : 'Offline'
+  routeBadge.textContent = connected
+    ? snapshot.stateStale ? 'Status stale' : 'BRSP authenticated'
+    : snapshot.phase === 'connecting' ? 'Connecting' : 'Offline'
+  const scopes = document.querySelector<HTMLElement>('[data-field="scopes"]')
+  if (scopes) {
+    scopes.textContent = snapshot.acceptedScopes.length > 0
+      ? snapshot.acceptedScopes.join(', ')
+      : '—'
+  }
 }
 
 function renderStatus(status: CompanionStatus): void {
@@ -102,18 +106,50 @@ function renderStatus(status: CompanionStatus): void {
   }
   set('phase', status.phase)
   set('route', status.route === 'immersive-vr' ? 'Immersive VR' : 'Browser')
+  set('language', status.language === 'de' ? 'German (de)' : 'English (en)')
+  set('xr-presenting', status.xrPresenting ? 'Presenting' : 'Not presenting')
+  set('participant-active', status.participantActive ? 'Active' : 'Inactive')
   set('block', status.blockOrdinal === null ? '—' : `${status.blockOrdinal} / 4`)
   set('condition', status.condition ?? '—')
   const elapsed = status.mediaElapsedSeconds === null ? '—' : `${Math.round(status.mediaElapsedSeconds)} s`
   const duration = status.mediaDurationSeconds === null ? '' : ` / ${Math.round(status.mediaDurationSeconds)} s`
   set('media', `${elapsed}${duration}${status.mediaPaused ? ' · paused' : ''}`)
   set('storage', status.storageHealthy ? 'Healthy' : 'Attention required')
+  set('authority', 'WebXR experiment')
+  set('remote-control', status.remoteControlEnabled ? 'Enabled on headset' : 'Read-only')
+  set('bridge', status.bridgeConnected ? 'Connected' : 'Unavailable')
+  set('sensor', `${status.polarPhase.replaceAll('_', ' ')}${status.polarReady ? ' · ready' : ''}`)
+  set('sensor-reason', status.polarReadinessReason || '—')
+  set('heart-rate', status.heartRateBpm === null ? '—' : `${status.heartRateBpm} bpm`)
+  set(
+    'ecg',
+    status.ecgSampleRateHz === null
+      ? '—'
+      : `${status.ecgSampleRateHz.toFixed(1)} Hz · ${status.ecgSampleCount.toLocaleString()} samples`,
+  )
+  set(
+    'sample-age',
+    status.lastEcgSampleAgeMs === null ? '—' : `${Math.round(status.lastEcgSampleAgeMs)} ms`,
+  )
+  set('recording', status.recordingState.replaceAll('_', ' '))
+  set('recording-revision', status.recordingRevision.toLocaleString())
+  set('recording-markers', status.recordingMarkerCount.toLocaleString())
+  set('recording-samples', status.recordingSamplesWritten.toLocaleString())
+  set('recording-drops', status.recordingDroppedBatches.toLocaleString())
+  set('recording-artifact', status.recordingArtifactOpen ? 'Open' : 'Closed')
+  set('recording-durable', status.recordingDurable ? 'Durable' : 'Not confirmed')
+  set('writer-health', status.polarWriterHealthy ? 'Healthy' : 'Attention required')
+  set('gaps', `${status.polarGapCount} gaps · ${status.polarReconnectCount} reconnects`)
+  set('preflight', status.startPreflightReady ? 'Ready to start' : 'Blocked')
+  set('receipt', status.lastReceiptStage ?? '—')
 
   renderCommandAvailability()
 }
 
 async function connect(): Promise<void> {
   if (!descriptor) return
+  latestStatus = null
+  renderCommandAvailability()
   await viewer?.stop()
   viewer = new CompanionViewer(descriptor)
   viewer.addEventListener('statechange', (event) => {
@@ -131,7 +167,8 @@ async function connect(): Promise<void> {
   })
   viewer.addEventListener('ack', (event) => {
     const acknowledgement = (event as CustomEvent<CommandAcknowledgement>).detail
-    commandResult.textContent = `${acknowledgement.accepted ? 'Accepted' : 'Rejected'}: ${acknowledgement.message}`
+    const stage = acknowledgement.stage ? ` · ${acknowledgement.stage}` : ''
+    commandResult.textContent = `${acknowledgement.accepted ? 'Accepted' : 'Rejected'}${stage}: ${acknowledgement.message}`
     commandResult.dataset.accepted = String(acknowledgement.accepted)
   })
   try {
@@ -167,6 +204,24 @@ disconnectButton.addEventListener('click', () => void disconnect())
 for (const button of commandButtons) {
   button.addEventListener('click', async () => {
     const name = button.dataset.command as RemoteCommandName
+    if (
+      name === 'abort_session' &&
+      !window.confirm('Abort the active WebXR session? WebXR will stop further experiment progression and, if connected, ask the APK to preserve the interrupted ECG record.')
+    ) {
+      return
+    }
+    if (
+      name === 'finalize_session' &&
+      !window.confirm('Finalize and close the APK ECG recording?')
+    ) {
+      return
+    }
+    if (
+      name === 'request_export' &&
+      !window.confirm('Prepare the finalized ECG export on the headset? This does not transfer the file to this companion.')
+    ) {
+      return
+    }
     try {
       const commandId = await viewer?.sendCommand(name)
       commandResult.textContent = commandId ? `Command ${name.replaceAll('_', ' ')} sent; waiting for acknowledgement…` : 'Command was not sent.'

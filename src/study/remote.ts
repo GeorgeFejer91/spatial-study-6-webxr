@@ -18,6 +18,11 @@ export const REMOTE_COMMAND_NAMES = [
   "resume_media",
   "advance",
   "back",
+  "abort_session",
+  "finalize_session",
+  "reconnect_sensor",
+  "return_to_experiment",
+  "request_export",
 ] as const
 export type RemoteCommandName = (typeof REMOTE_COMMAND_NAMES)[number]
 
@@ -42,6 +47,11 @@ export type RemoteIntent =
   | { type: "resume_media" }
   | { type: "advance_assessment" }
   | { type: "back_assessment" }
+  | { type: "abort_session" }
+  | { type: "finalize_session" }
+  | { type: "reconnect_sensor" }
+  | { type: "return_to_experiment" }
+  | { type: "request_export" }
 
 export type RemoteGuardDecision =
   | { accepted: true; intent: RemoteIntent }
@@ -202,6 +212,34 @@ export function guardRemoteCommand(
             accepted: false,
             code: "back_not_allowed",
             detail: "This page has no safe questionnaire back edge.",
+          }
+    case "abort_session":
+      return state.sessionId !== null && state.page !== "complete" && state.page !== "aborted"
+        ? { accepted: true, intent: { type: "abort_session" } }
+        : {
+            accepted: false,
+            code: "abort_not_allowed",
+            detail: "There is no active unfinished session to abort.",
+          }
+    case "finalize_session":
+      return state.sessionId !== null && state.page === "complete"
+        ? { accepted: true, intent: { type: "finalize_session" } }
+        : {
+            accepted: false,
+            code: "finalize_not_allowed",
+            detail: "Only a completed active session can be finalized remotely.",
+          }
+    case "reconnect_sensor":
+      return { accepted: true, intent: { type: "reconnect_sensor" } }
+    case "return_to_experiment":
+      return { accepted: true, intent: { type: "return_to_experiment" } }
+    case "request_export":
+      return state.sessionId !== null
+        ? { accepted: true, intent: { type: "request_export" } }
+        : {
+            accepted: false,
+            code: "export_not_allowed",
+            detail: "There is no active session to export.",
           }
   }
 }

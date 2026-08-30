@@ -2,12 +2,12 @@ import type { ConditionId, LanguageCode, TimingMode } from "./types"
 
 export const COPY_PROVENANCE = {
   sourceRepository: "MesmerPrism/spatial-study-6",
-  sourceRevision: "dd41646e02e4a1d73b990626b74048d34ce8f26a",
-  sourceTree: "0764bcfad349aee20724b3a8fe50c776410fe3d3",
-  upstreamAuthorityRepository: "MesmerPrism/study-6",
-  upstreamAuthorityRevision: "994498c9299b3f5d5475047eb32022b629a83473",
+  sourceRevision: "384935890d8ba29a2851002163352019d65768f6",
+  sourceTree: "3bdba70e545b7b9224c0e8469b49d64b405b24b9",
+  legacyUpstreamRepository: "MesmerPrism/study-6",
+  legacyUpstreamRevision: "994498c9299b3f5d5475047eb32022b629a83473",
   questionnaireSchemaId: "study6-questionnaire-v8",
-  english: "Current v1 native questionnaire-panel wording",
+  english: "Selected native questionnaire-panel wording and Polar readiness projection",
   german:
     "Complete German projection; native v1 supplied demographics, titles, and SAM wording, with the remaining native English strings translated without changing response fields or scales.",
 } as const
@@ -30,15 +30,15 @@ const ENGLISH_COPY = {
   "timing.clipped": "Web test (10 s)",
   "page.participant_id.title": "Participant ID",
   "page.participant_id.body":
-    "Choose the next unused Study 6 id in this browser, or enter a manual id before this app creates its local durable session and questionnaire data.",
+    "Choose a participant number for this session. Incomplete sessions resume at their first incomplete block; a completed number starts a new timestamped data set.",
   "participant.available": "Available {prefix} ids",
   "participant.select_unused": "Select unused {prefix} id",
   "participant.none_available": "No unused {prefix} ids remain",
   "participant.manual": "Manual participant id",
   "participant.manual_note":
-    "Manual ids are allowed, but cannot match an id already recorded in this browser. Use a non-pool manual id for testing so PI/PH allocations are not consumed.",
+    "Manual ids use the same resume and repeat-data-set behavior.",
   "page.demographics.title": "Demographics",
-  "page.demographics.subtitle": "Participant details and consent",
+  "page.demographics.subtitle": "Participant details, consent, and Polar H10 check",
   "demographics.first_name": "First name",
   "demographics.last_name": "Last name",
   "demographics.age": "Age",
@@ -116,6 +116,10 @@ const ENGLISH_COPY = {
   "page.technical_hold.title": "Session paused",
   "technical_hold.body":
     "The session is preserved locally. An operator must resolve the problem before continuing.",
+  "page.aborted.title": "Session aborted",
+  "aborted.heading": "Session safely stopped",
+  "aborted.body":
+    "The WebXR session was closed as abandoned. Saved questionnaire revisions remain available for local export; the sensor recording is finalized separately.",
   "page.complete.title": "Complete",
   "complete.heading": "Questionnaire complete",
   "complete.body":
@@ -166,15 +170,15 @@ const GERMAN_COPY = {
   "timing.clipped": "Webtest (10 Sek.)",
   "page.participant_id.title": "Teilnehmer-ID",
   "page.participant_id.body":
-    "Wählen Sie die nächste unbenutzte Study-6-ID in diesem Browser oder geben Sie eine manuelle ID ein, bevor die App die lokale dauerhafte Sitzung und Fragebogendaten erstellt.",
+    "Wählen Sie eine Teilnehmernummer für diese Sitzung. Unvollständige Sitzungen werden beim ersten unvollständigen Block fortgesetzt; eine abgeschlossene Nummer beginnt einen neuen Datensatz mit Zeitstempel.",
   "participant.available": "Verfügbare {prefix}-IDs",
   "participant.select_unused": "Unbenutzte {prefix}-ID auswählen",
   "participant.none_available": "Keine unbenutzten {prefix}-IDs mehr verfügbar",
   "participant.manual": "Manuelle Teilnehmer-ID",
   "participant.manual_note":
-    "Manuelle IDs sind zulässig, dürfen aber keiner bereits in diesem Browser erfassten ID entsprechen. Verwenden Sie für Tests eine manuelle ID außerhalb des Pools, damit keine PI-/PH-Zuteilung verbraucht wird.",
+    "Manuelle IDs verwenden dasselbe Verhalten zum Fortsetzen und Erstellen wiederholter Datensätze.",
   "page.demographics.title": "Demografische Angaben",
-  "page.demographics.subtitle": "Teilnehmerdaten und Einwilligung",
+  "page.demographics.subtitle": "Teilnehmerdaten, Einwilligung und Polar-H10-Prüfung",
   "demographics.first_name": "Vorname",
   "demographics.last_name": "Nachname",
   "demographics.age": "Alter",
@@ -253,6 +257,10 @@ const GERMAN_COPY = {
   "page.technical_hold.title": "Sitzung pausiert",
   "technical_hold.body":
     "Die Sitzung ist lokal gesichert. Eine Bedienperson muss das Problem beheben, bevor die Sitzung fortgesetzt werden kann.",
+  "page.aborted.title": "Sitzung abgebrochen",
+  "aborted.heading": "Sitzung sicher beendet",
+  "aborted.body":
+    "Die WebXR-Sitzung wurde als abgebrochen geschlossen. Gespeicherte Fragebogenversionen können lokal exportiert werden; die Sensoraufzeichnung wird separat finalisiert.",
   "page.complete.title": "Abgeschlossen",
   "complete.heading": "Fragebogen abgeschlossen",
   "complete.body":

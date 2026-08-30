@@ -82,6 +82,49 @@ describe("bounded companion commands", () => {
       accepted: false,
       code: "advance_not_allowed",
     })
+    expect(guardRemoteCommand(state, command(state, "abort_session"), true)).toMatchObject({
+      accepted: false,
+      code: "abort_not_allowed",
+    })
+    expect(guardRemoteCommand(state, command(state, "request_export"), true)).toMatchObject({
+      accepted: false,
+      code: "export_not_allowed",
+    })
+  })
+
+  it("admits sensor recovery but leaves effect authority to the APK", () => {
+    const state = createInitialExperimentState()
+    expect(guardRemoteCommand(state, command(state, "reconnect_sensor"), true)).toMatchObject({
+      accepted: true,
+      intent: { type: "reconnect_sensor" },
+    })
+    expect(guardRemoteCommand(state, command(state, "return_to_experiment"), true)).toMatchObject({
+      accepted: true,
+      intent: { type: "return_to_experiment" },
+    })
+  })
+
+  it("routes abort to the WebXR reducer and rejects it after terminal state", () => {
+    let state = createInitialExperimentState()
+    state = {
+      ...state,
+      sessionId: "WEBXR_ABORT_TEST",
+      page: "block_ready",
+    }
+    expect(guardRemoteCommand(state, command(state, "abort_session"), true)).toMatchObject({
+      accepted: true,
+      intent: { type: "abort_session" },
+    })
+
+    state = {
+      ...state,
+      page: "aborted",
+      finalizedAtUtc: "2026-08-29T20:00:02Z",
+    }
+    expect(guardRemoteCommand(state, command(state, "abort_session"), true)).toMatchObject({
+      accepted: false,
+      code: "abort_not_allowed",
+    })
   })
 
   it("emits privacy-minimized status with no identity or answers", () => {

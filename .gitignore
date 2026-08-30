@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 coverage
+target
 playwright-report
 test-results
 blob-report

@@ -16,6 +16,16 @@ export interface VdoChannelDetail {
   UUID?: string
   streamID?: string
   type?: string
+  label?: string
+  channel?: RTCDataChannel
+}
+
+export interface VdoOpenChannelOptions {
+  ordered?: boolean
+  maxRetransmits?: number
+  maxPacketLifeTime?: number
+  protocol?: string
+  timeout?: number
 }
 
 export interface VdoNinjaSdk extends EventTarget {
@@ -33,6 +43,11 @@ export interface VdoNinjaSdk extends EventTarget {
     data: unknown,
     target?: { uuid?: string; streamID?: string; preference?: 'publisher' | 'viewer' | 'any' | 'all' },
   ): boolean
+  openChannel?(
+    uuid: string,
+    label: string,
+    options?: VdoOpenChannelOptions,
+  ): Promise<RTCDataChannel>
   disconnect(): Promise<void>
 }
 
@@ -98,8 +113,9 @@ export function createVdoSdk(
 ): VdoNinjaSdk {
   return new Constructor({
     // The SDK hashes room/stream identifiers and encrypts SDP/ICE signaling when
-    // a password is present. Application messages remain independently protected
-    // by the protocol module's authenticated AES-GCM envelope.
+    // a password is present. BRSP adds mutual HMAC proof, negotiated scopes,
+    // replay/epoch fencing, and semantic command receipts inside WebRTC's DTLS
+    // data channels. The experimental WSS relay retains its separate AES-GCM wrapper.
     password: `s6-vdo-v1-${pairingKey}`,
     salt: 'spatial-study-6-webxr-v1',
     forceTURN: forceTurn,

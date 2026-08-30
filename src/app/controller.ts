@@ -1,5 +1,16 @@
 import type { CommandDecision } from '../companion/host.ts'
 import type { CompanionStatus, RemoteCommandName } from '../companion/protocol.ts'
+import {
+  disconnectedPolarStatus,
+  polarProjectionIsReady,
+  type BridgeExperimentMarker,
+  type BridgeReceiptStage,
+  type BridgeSensorAction,
+  type ExperimentMarkerEventType,
+  type PolarStatusProjection,
+  type StudyBridgeClient,
+  type StudyBridgeProjection,
+} from '../bridge/index.ts'
 import { StudyMediaPlayer, type StudyMediaSnapshot } from '../media/player.ts'
 import {
   downloadBlob,
@@ -36,6 +47,7 @@ export interface StudyControllerOptions {
   runtime: StudyXRRuntime
   media: StudyMediaPlayer
   panelRenderer: StudyPanelRenderer
+  bridge?: StudyBridgeClient
 }
 
 function safeFilenameToken(value: string): string {
@@ -47,6 +59,7 @@ export class StudyController {
   private readonly runtime: StudyXRRuntime
   private readonly media: StudyMediaPlayer
   private readonly panelRenderer: StudyPanelRenderer
+  private readonly bridge: StudyBridgeClient | null
   private database: StudyDatabase | null = null
   private state: ExperimentState = createInitialExperimentState()
   private durableRevision = -1
@@ -55,22 +68,38 @@ export class StudyController {
   private recoveryBlocked = false
   private sessionFinalized = false
   private localMessage = ''
+  private sensorMessage = ''
   private operation: Promise<unknown> = Promise.resolve()
+  private remoteOperation: Promise<unknown> = Promise.resolve()
   private lastMediaRevisionPosition = 0
   private controlEnabled = false
   private companionControls: CompanionControls | null = null
   private xrPresenting = false
   private blockStartInFlight = false
+  private polar: PolarStatusProjection = disconnectedPolarStatus()
+  private bridgeProjection: StudyBridgeProjection | null = null
+  private unsubscribeBridge: (() => void) | null = null
 
   constructor(options: StudyControllerOptions) {
     this.shell = options.shell
     this.runtime = options.runtime
     this.media = options.media
     this.panelRenderer = options.panelRenderer
+    this.bridge = options.bridge ?? null
   }
 
   async initialize(): Promise<void> {
     this.panelRenderer.resetTransientState()
+    if (this.bridge) {
+      this.unsubscribeBridge = this.bridge.subscribe((projection) => {
+        this.applyBridgeProjection(projection)
+      })
+      try {
+        await this.bridge.connect()
+      } catch (error) {
+        this.sensorMessage = error instanceof Error ? error.message : String(error)
+      }
+    }
     try {
       this.database = await StudyDatabase.open()
       this.usedParticipantIds = (await this.database.listParticipants()).map(
@@ -101,8 +130,11 @@ export class StudyController {
           this.recoveryBlocked = false
           this.sessionFinalized = false
           this.localMessage = 'Recovered the unfinished local session.'
-          if (this.state.page === 'complete') {
-            await this.database.finalizeSession(this.state.sessionId!, 'complete')
+          if (this.state.page === 'complete' || this.state.page === 'aborted') {
+            await this.database.finalizeSession(
+              this.state.sessionId!,
+              this.state.page === 'complete' ? 'complete' : 'abandoned',
+            )
             this.sessionFinalized = true
           } else if (this.state.page === 'stimulus') {
             this.prepareRecoveredMedia()
@@ -127,6 +159,11 @@ export class StudyController {
       this.localMessage = error instanceof Error ? error.message : String(error)
     }
 
+    this.initializeCompanionControls()
+    this.render()
+  }
+
+  private initializeCompanionControls(): void {
     this.companionControls = new CompanionControls({
       slot: this.shell.companionSlot,
       canvas: this.shell.canvas,
@@ -136,7 +173,6 @@ export class StudyController {
         this.controlEnabled = enabled
       },
     })
-    this.render()
   }
 
   createPanelActions() {
@@ -145,7 +181,8 @@ export class StudyController {
       setDemographicsLanguage: (languageCode: LanguageCode) =>
         void this.enqueue({ type: 'set_demographics_language', languageCode }),
       startParticipant: (participantId: string) => void this.startParticipant(participantId),
-      submitDemographics: (demographics: Demographics) => void this.enqueue({ type: 'submit_demographics', demographics }),
+      submitDemographics: (demographics: Demographics) =>
+        void this.submitDemographics(demographics),
       startBlock: () => void this.startBlock(),
       setSam: (dimension: 'valence' | 'arousal' | 'dominance', value: number) =>
         void this.enqueue({ type: 'set_sam', dimension, value }),
@@ -157,7 +194,7 @@ export class StudyController {
       ) => void this.enqueue({ type: 'set_emotion', emotion, value }),
       setHand: (dimension: 'ownership' | 'agency', value: number) =>
         void this.enqueue({ type: 'set_hand', dimension, value }),
-      advanceAssessment: () => void this.enqueue({ type: 'advance_assessment', recordedAtUtc: new Date().toISOString() }),
+      advanceAssessment: () => void this.advanceAssessment(),
       backAssessment: () => void this.enqueue({ type: 'back_assessment' }),
       exportJson: () => void this.export('json'),
       exportCsv: () => void this.export('csv'),
@@ -179,23 +216,12 @@ export class StudyController {
 
   onMediaEnded(snapshot: StudyMediaSnapshot): void {
     if (this.state.page !== 'stimulus') return
-    void this.enqueue({
-      type: 'complete_stimulus',
-      observedDurationMs: snapshot.durationMs,
-      endedAtUtc: new Date().toISOString(),
-    }).then((accepted) => {
-      if (accepted) return
-      this.localMessage = `${this.localMessage} Select the media surface to retry saving completion.`.trim()
-      this.render()
-    })
+    void this.completeMedia(snapshot)
   }
 
   onMediaError(snapshot: StudyMediaSnapshot): void {
     if (this.state.page !== 'stimulus') return
-    void this.enqueue({
-      type: 'enter_technical_hold',
-      reason: snapshot.error?.slice(0, 96) || 'media_error',
-    })
+    void this.enterTechnicalHold(snapshot.error?.slice(0, 96) || 'media_error')
   }
 
   onMediaToggleRequest(snapshot: StudyMediaSnapshot): void {
@@ -230,11 +256,16 @@ export class StudyController {
     this.companionControls = null
     this.database?.close()
     this.database = null
+    this.unsubscribeBridge?.()
+    this.unsubscribeBridge = null
+    this.bridge?.close()
   }
 
   pauseMedia(): void {
     void this.enqueue({ type: 'pause_media' }).then((accepted) => {
-      if (accepted) this.media.pause()
+      if (!accepted) return
+      this.media.pause()
+      void this.recordSensorMarker('media_paused', this.state, this.media.snapshot().positionMs)
     })
   }
 
@@ -242,7 +273,11 @@ export class StudyController {
     const playback = this.media.play()
     void playback
       .then(async () => {
-        if (!(await this.enqueue({ type: 'resume_media' }))) this.media.pause()
+        if (!(await this.enqueue({ type: 'resume_media' }))) {
+          this.media.pause()
+          return
+        }
+        await this.recordSensorMarker('media_resumed', this.state, this.media.snapshot().positionMs)
       })
       .catch((error) => {
         this.localMessage = error instanceof Error ? error.message : String(error)
@@ -342,10 +377,16 @@ export class StudyController {
         }`
       }
 
-      if (next.page === 'complete' && previous.page !== 'complete') {
+      if (
+        (next.page === 'complete' || next.page === 'aborted') &&
+        previous.page !== next.page
+      ) {
         this.sessionFinalized = false
         try {
-          await this.database.finalizeSession(next.sessionId, 'complete')
+          await this.database.finalizeSession(
+            next.sessionId,
+            next.page === 'complete' ? 'complete' : 'abandoned',
+          )
           this.sessionFinalized = true
         } catch (error) {
           this.storageHealthy = false
@@ -366,6 +407,119 @@ export class StudyController {
     this.syncMediaVisibility()
     this.render()
     return true
+  }
+
+  private async submitDemographics(demographics: Demographics): Promise<void> {
+    if (!(await this.enqueue({ type: 'submit_demographics', demographics }))) return
+    await this.recordSensorMarker('experiment_ready', this.state)
+  }
+
+  private async advanceAssessment(): Promise<boolean> {
+    const previousPage = this.state.page
+    if (
+      !(await this.enqueue({
+        type: 'advance_assessment',
+        recordedAtUtc: new Date().toISOString(),
+      }))
+    ) {
+      return false
+    }
+    if (previousPage !== 'hand_embodiment') return true
+
+    await this.recordSensorMarker('block_completed', this.state)
+    if (this.state.page !== 'complete') return true
+
+    const markerSaved = await this.recordSensorMarker('session_finalized', this.state)
+    if (!this.bridge) return true
+    if (!markerSaved) return false
+    return this.applySensorOperation('finalize_recording', 'persisted')
+  }
+
+  private async completeMedia(snapshot: StudyMediaSnapshot): Promise<void> {
+    const accepted = await this.enqueue({
+      type: 'complete_stimulus',
+      observedDurationMs: snapshot.durationMs,
+      endedAtUtc: new Date().toISOString(),
+    })
+    if (!accepted) {
+      this.localMessage = `${this.localMessage} Select the media surface to retry saving completion.`.trim()
+      this.render()
+      return
+    }
+    await this.recordSensorMarker('media_ended', this.state, snapshot.positionMs)
+  }
+
+  private async enterTechnicalHold(reason: string): Promise<boolean> {
+    const accepted = await this.enqueue({ type: 'enter_technical_hold', reason })
+    if (accepted) await this.recordSensorMarker('technical_hold', this.state)
+    return accepted
+  }
+
+  private async recordSensorMarker(
+    eventType: ExperimentMarkerEventType,
+    state: ExperimentState,
+    mediaPositionMs?: number,
+  ): Promise<boolean> {
+    if (!this.bridge) return true
+    const block = state.blocks[state.currentBlockIndex]
+    const marker: BridgeExperimentMarker = {
+      markerId: `marker-${crypto.randomUUID()}`,
+      eventType,
+      webxrRevision: state.revision,
+      ...(state.sessionId ? { sessionId: state.sessionId } : {}),
+      ...(block
+        ? {
+            blockOrder: block.blockOrder,
+            conditionId: block.conditionId,
+            mediaId: block.mediaId,
+          }
+        : {}),
+      ...(mediaPositionMs === undefined
+        ? {}
+        : { mediaPositionMs: Math.max(0, Math.round(mediaPositionMs)) }),
+      browserMonotonicMs: Math.max(0, Math.round(performance.now())),
+      browserUtc: new Date().toISOString(),
+    }
+    try {
+      const receipt = await this.bridge.recordExperimentMarker(marker, 'persisted')
+      this.sensorMessage = receipt.accepted
+        ? ''
+        : receipt.detail || `The APK rejected ${eventType}.`
+      this.render()
+      return receipt.accepted
+    } catch (error) {
+      this.sensorMessage = `ECG marker ${eventType} failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+      if (state.sessionId && this.database) {
+        await this.database
+          .appendEvent(state.sessionId, 'sensor_marker_failed', { eventType })
+          .catch(() => undefined)
+      }
+      this.render()
+      return false
+    }
+  }
+
+  private async applySensorOperation(
+    action: Exclude<BridgeSensorAction, 'record_experiment_marker'>,
+    targetStage: BridgeReceiptStage,
+  ): Promise<boolean> {
+    if (!this.bridge) {
+      this.sensorMessage = `${action} requires the APK sensor recorder.`
+      this.render()
+      return false
+    }
+    try {
+      const receipt = await this.bridge.applySensorAction(action, targetStage)
+      this.sensorMessage = receipt.accepted ? '' : receipt.detail || receipt.code
+      this.render()
+      return receipt.accepted
+    } catch (error) {
+      this.sensorMessage = error instanceof Error ? error.message : String(error)
+      this.render()
+      return false
+    }
   }
 
   private async startParticipant(participantId: string): Promise<void> {
@@ -399,6 +553,13 @@ export class StudyController {
       this.render()
       return false
     }
+    if (!this.bridgeStartPreflightReady()) {
+      this.localMessage = this.bridgeProjection?.sensorConnected
+        ? `Block start is gated by the Sensor Bridge: ${this.polar.readinessReason || 'live 130 Hz ECG and a healthy writer are required'}.`
+        : 'Block start requires the connected APK sensor recorder.'
+      this.render()
+      return false
+    }
     this.blockStartInFlight = true
     try {
       this.media.load(
@@ -409,13 +570,24 @@ export class StudyController {
         },
         0,
       )
+      if (!(await this.recordSensorMarker('block_start_intent', this.state, 0))) {
+        this.localMessage = 'Block start stopped because the ECG intent marker was not durable.'
+        this.render()
+        return false
+      }
       await this.media.play()
       const accepted = await this.enqueue({
         type: 'start_block',
         startedAtUtc: new Date().toISOString(),
       })
-      if (!accepted) this.media.pause()
-      return accepted
+      if (!accepted) {
+        this.media.pause()
+        return false
+      }
+      if (await this.recordSensorMarker('media_started', this.state, 0)) return true
+      this.media.pause()
+      await this.enterTechnicalHold('sensor_media_start_marker_failed')
+      return false
     } catch (error) {
       this.localMessage = error instanceof Error ? error.message : String(error)
       this.media.pause()
@@ -467,7 +639,7 @@ export class StudyController {
   }
 
   private startNewSession(): void {
-    if (this.state.page !== 'complete') return
+    if (this.state.page !== 'complete' && this.state.page !== 'aborted') return
     if (!this.sessionFinalized) {
       this.storageHealthy = false
       this.localMessage = 'A terminal receipt must be saved before another session can start.'
@@ -488,6 +660,10 @@ export class StudyController {
   private companionStatus(): CompanionStatus {
     const domain = remoteStatus(this.state)
     const media = this.media.snapshot()
+    const bridgeConnected = this.bridgeProjection?.sensorConnected ?? false
+    const recording = this.bridgeProjection?.snapshot?.recording ?? null
+    const polarReady = polarProjectionIsReady(this.polar)
+    const startPreflightReady = this.bridgeStartPreflightReady() && this.state.page === 'block_ready'
     return {
       revision: domain.revision,
       phase: domain.page,
@@ -501,13 +677,61 @@ export class StudyController {
       mediaDurationSeconds: this.state.page === 'stimulus' ? media.durationMs / 1_000 : null,
       mediaPaused: media.phase === 'paused',
       storageHealthy: this.storageHealthy,
+      authority: 'webxr_experiment_owner',
+      bridgeConnected,
+      recordingState: recording?.state ?? 'unavailable',
+      recordingRevision: Math.min(recording?.revision ?? 0, Number.MAX_SAFE_INTEGER),
+      recordingMarkerCount: Math.min(recording?.markerCount ?? 0, Number.MAX_SAFE_INTEGER),
+      recordingSamplesWritten: Math.min(
+        recording?.samplesWritten ?? 0,
+        Number.MAX_SAFE_INTEGER,
+      ),
+      recordingDroppedBatches: Math.min(
+        recording?.droppedBatches ?? 0,
+        Number.MAX_SAFE_INTEGER,
+      ),
+      recordingArtifactOpen: recording?.artifactOpen ?? false,
+      recordingDurable: recording?.durable ?? false,
+      polarPhase: this.polar.phase,
+      polarReady,
+      polarReadinessReason: this.polar.readinessReason.slice(0, 240),
+      heartRateBpm: this.polar.heartRateBpm,
+      ecgSampleRateHz: this.polar.ecgSampleRateHz,
+      ecgSampleCount: Math.min(this.polar.ecgSampleCount, Number.MAX_SAFE_INTEGER),
+      lastEcgSampleAgeMs:
+        this.polar.lastSampleAgeMs === null
+          ? null
+          : Math.min(this.polar.lastSampleAgeMs, 86_400_000),
+      polarWriterHealthy: this.polar.writer.healthy,
+      polarReconnectCount: Math.min(this.polar.reconnectCount, Number.MAX_SAFE_INTEGER),
+      polarGapCount: Math.min(this.polar.gapCount, Number.MAX_SAFE_INTEGER),
+      startPreflightReady,
+      lastReceiptStage: this.bridgeProjection?.lastReceipt?.stage ?? null,
+      remoteControlEnabled: this.controlEnabled,
       remoteAdvanceAllowed: canAdvanceAssessment(this.state),
       remoteBackAllowed: canGoBackAssessment(this.state),
-      remoteStartAllowed: this.state.page === 'block_ready',
+      remoteStartAllowed: this.bridge ? startPreflightReady : this.state.page === 'block_ready',
+      remoteAbortAllowed:
+        this.state.sessionId !== null &&
+        this.state.page !== 'complete' &&
+        this.state.page !== 'aborted',
+      remoteFinalizeAllowed: this.state.sessionId !== null && this.state.page === 'complete',
+      remoteExportAllowed: this.state.sessionId !== null,
     }
   }
 
   private async handleRemoteCommand(
+    name: Exclude<RemoteCommandName, 'request_status'>,
+    expectedRevision: number,
+  ): Promise<CommandDecision> {
+    const next = this.remoteOperation.then(() =>
+      this.applyRemoteCommand(name, expectedRevision),
+    )
+    this.remoteOperation = next.catch(() => undefined)
+    return next
+  }
+
+  private async applyRemoteCommand(
     name: Exclude<RemoteCommandName, 'request_status'>,
     expectedRevision: number,
   ): Promise<CommandDecision> {
@@ -528,15 +752,32 @@ export class StudyController {
         return { accepted: true, code: 'status_sent', message: 'Fresh status sent.' }
       case 'recenter_panel':
         this.runtime.recenterPanel()
-        return { accepted: true, code: 'recentered', message: 'Panel recentered.' }
+        return {
+          accepted: true,
+          code: 'recentered',
+          message: 'Panel recentered.',
+        }
       case 'start_block':
         return (await this.startBlock())
-          ? { accepted: true, code: 'started', message: 'Block started and saved.' }
+          ? this.withPersistedWebXrEffect({
+              accepted: true,
+              code: 'started',
+              message: 'Block started and saved.',
+            })
           : { accepted: false, code: 'start_failed', message: this.localMessage }
       case 'pause_media':
         if (await this.enqueue({ type: 'pause_media' })) {
           this.media.pause()
-          return { accepted: true, code: 'paused', message: 'Media paused.' }
+          await this.recordSensorMarker(
+            'media_paused',
+            this.state,
+            this.media.snapshot().positionMs,
+          )
+          return this.withPersistedWebXrEffect({
+            accepted: true,
+            code: 'paused',
+            message: 'Media paused.',
+          })
         }
         return { accepted: false, code: 'pause_failed', message: this.localMessage }
       case 'resume_media':
@@ -550,19 +791,104 @@ export class StudyController {
           }
         }
         if (await this.enqueue({ type: 'resume_media' })) {
-          return { accepted: true, code: 'resumed', message: 'Media resumed.' }
+          await this.recordSensorMarker(
+            'media_resumed',
+            this.state,
+            this.media.snapshot().positionMs,
+          )
+          return this.withPersistedWebXrEffect({
+            accepted: true,
+            code: 'resumed',
+            message: 'Media resumed.',
+          })
         }
         this.media.pause()
         return { accepted: false, code: 'resume_failed', message: this.localMessage }
       case 'advance_assessment':
-        return (await this.enqueue({ type: 'advance_assessment', recordedAtUtc: new Date().toISOString() }))
-          ? { accepted: true, code: 'advanced', message: 'Questionnaire advanced.' }
+        return (await this.advanceAssessment())
+          ? this.withPersistedWebXrEffect({
+              accepted: true,
+              code: 'advanced',
+              message: 'Questionnaire advanced.',
+            })
           : { accepted: false, code: 'advance_failed', message: this.localMessage }
       case 'back_assessment':
         return (await this.enqueue({ type: 'back_assessment' }))
-          ? { accepted: true, code: 'went_back', message: 'Questionnaire moved back.' }
+          ? this.withPersistedWebXrEffect({
+              accepted: true,
+              code: 'went_back',
+              message: 'Questionnaire moved back.',
+            })
           : { accepted: false, code: 'back_failed', message: this.localMessage }
+      case 'abort_session':
+        return this.abortSession()
+      case 'finalize_session':
+        return this.forwardSensorAction('finalize_recording', 'persisted')
+      case 'reconnect_sensor':
+        return this.forwardSensorAction('reconnect_sensor', 'applied')
+      case 'return_to_experiment':
+        return this.forwardSensorAction('return_to_experiment', 'applied')
+      case 'request_export':
+        return this.forwardSensorAction('request_sensor_export', 'observed')
     }
+  }
+
+  private async abortSession(): Promise<CommandDecision> {
+    const accepted = await this.enqueue({
+      type: 'abort_session',
+      reason: 'remote_operator_abort',
+      abortedAtUtc: new Date().toISOString(),
+    })
+    if (!accepted) {
+      return { accepted: false, code: 'abort_failed', message: this.localMessage }
+    }
+    this.media.pause()
+    const marked = await this.recordSensorMarker('session_aborted', this.state)
+    const finalized = !this.bridge || (marked && (await this.applySensorOperation('finalize_recording', 'persisted')))
+    return this.withPersistedWebXrEffect({
+      accepted: true,
+      code: finalized ? 'aborted' : 'aborted_sensor_attention',
+      message: finalized
+        ? 'WebXR session aborted and sensor recording finalized.'
+        : 'WebXR session aborted; the APK recording still needs attention.',
+    })
+  }
+
+  private async forwardSensorAction(
+    action: Exclude<BridgeSensorAction, 'record_experiment_marker'>,
+    targetStage: BridgeReceiptStage,
+  ): Promise<CommandDecision> {
+    if (!this.bridge) {
+      return {
+        accepted: false,
+        code: 'sensor_recorder_required',
+        message: `${action} requires the native sensor recorder.`,
+      }
+    }
+    try {
+      const receipt = await this.bridge.applySensorAction(action, targetStage)
+      return {
+        accepted: receipt.accepted,
+        code: receipt.code,
+        message: receipt.detail || `${action} reached ${receipt.stage}.`,
+        stage: receipt.stage,
+        sensorRevision: receipt.resultingRevision,
+      }
+    } catch (error) {
+      return {
+        accepted: false,
+        code: 'bridge_command_failed',
+        message: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  private withPersistedWebXrEffect(decision: CommandDecision): CommandDecision {
+    // WebXR owns and durably stores experiment revisions. Sensor receipts are a
+    // separate effect stream and must never replace this reducer receipt.
+    return decision.accepted
+      ? { ...decision, stage: 'persisted' }
+      : decision
   }
 
   private render(): void {
@@ -575,11 +901,40 @@ export class StudyController {
       pauseLabel: language === 'de' ? 'Medium pausieren' : 'Pause media',
       resumeLabel: language === 'de' ? 'Medium fortsetzen' : 'Resume media',
     })
+    const displayMessage = [this.localMessage, this.sensorMessage].filter(Boolean).join(' · ')
     this.panelRenderer.render(this.state, {
       usedParticipantIds: this.usedParticipantIds,
-      localMessage: this.localMessage,
+      localMessage: displayMessage,
       storageHealthy: this.storageHealthy,
+      polar: this.polar,
+      startPreflightReady: this.bridgeStartPreflightReady(),
     })
-    this.shell.setStatus(this.localMessage || `${this.state.page.replaceAll('_', ' ')} · local-only`)
+    this.shell.setStatus(
+      displayMessage ||
+        `${this.state.page.replaceAll('_', ' ')} · WebXR authority · ${this.bridge ? 'APK sensor recorder' : 'sensor-disabled rehearsal'}`,
+    )
+  }
+
+  private applyBridgeProjection(projection: StudyBridgeProjection): void {
+    this.bridgeProjection = projection
+    this.polar = projection.polar
+    if (!projection.sensorConnected) {
+      this.sensorMessage = projection.connectionDetail
+    } else if (projection.lastError) {
+      this.sensorMessage = `${projection.lastError.code}: ${projection.lastError.detail}`
+    } else {
+      this.sensorMessage = ''
+    }
+    this.render()
+  }
+
+  private bridgeStartPreflightReady(): boolean {
+    if (!this.bridge) return true
+    return (
+      (this.bridgeProjection?.sensorConnected ?? false) &&
+      polarProjectionIsReady(this.polar) &&
+      this.polar.writer.phase === 'recording' &&
+      this.polar.writer.healthy
+    )
   }
 }

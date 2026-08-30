@@ -50,18 +50,18 @@ export class CompanionControls {
         <div><span>VOLATILE PEER SESSION</span><h2>Browser companion</h2></div>
         <button type="button" data-close aria-label="Close">×</button>
       </div>
-      <p>Enable pairing only while an authorized operator is present. VDO.Ninja uses public signaling and STUN/TURN; a direct WebRTC route can disclose peer IP addresses. The app does not record the mirror.</p>
+      <p>Enable pairing only while an authorized operator is present. BRSP performs mutual pairing-secret proof and scopes every command over VDO.Ninja WebRTC. Public signaling/STUN/TURN is still used, and a direct route can disclose peer IP addresses. The app does not record the mirror.</p>
       <label class="study6-companion-dialog__option"><input type="checkbox" data-force-turn /> Request TURN relay instead of a direct route</label>
       <div class="study6-companion-dialog__actions" data-start-actions></div>
       <p class="study6-companion-dialog__state" data-state role="status">Pairing is off.</p>
       <div class="study6-companion-dialog__pair" data-pair hidden>
-        <img data-qr alt="One-time companion pairing QR code" />
+        <img data-qr alt="Companion session pairing QR code" />
         <div>
-          <label for="study6-companion-link">One-time companion link</label>
+          <label for="study6-companion-link">Session companion link</label>
           <textarea id="study6-companion-link" data-link readonly rows="5"></textarea>
           <button type="button" data-copy>Copy link</button>
-          <label class="study6-companion-dialog__option"><input type="checkbox" data-control /> Allow bounded remote commands</label>
-          <p>Remote control never permits participant entry, questionnaire answers, consent, immersive-VR admission, exports, or deletion.</p>
+          <label class="study6-companion-dialog__option"><input type="checkbox" data-control /> Allow scoped BRSP remote commands</label>
+          <p>Remote control never permits participant entry, questionnaire answers, consent, immersive-VR admission, data deletion, or record transfer. WebXR remains the experiment authority and may request an APK-local sensor export when the recorder is connected.</p>
         </div>
       </div>
     `
@@ -73,7 +73,7 @@ export class CompanionControls {
     this.controlCheckbox = this.dialog.querySelector<HTMLInputElement>('[data-control]')!
     this.forceTurnCheckbox = this.dialog.querySelector<HTMLInputElement>('[data-force-turn]')!
     const actionSlot = this.dialog.querySelector<HTMLElement>('[data-start-actions]')!
-    this.startButton = button('Enable one-time pairing', 'study6-companion-dialog__primary')
+    this.startButton = button('Enable pairing session', 'study6-companion-dialog__primary')
     this.stopButton = button('Stop pairing')
     this.stopButton.disabled = true
     actionSlot.append(this.startButton, this.stopButton)
@@ -107,7 +107,7 @@ export class CompanionControls {
   private async start(): Promise<void> {
     this.startButton.disabled = true
     this.forceTurnCheckbox.disabled = true
-    this.state.textContent = 'Creating a one-time peer session…'
+    this.state.textContent = 'Creating a reconnectable pairing session…'
     try {
       const [host, qrCodeModule] = await Promise.all([
         this.getHost(),
@@ -160,7 +160,7 @@ export class CompanionControls {
     } catch {
       this.link.focus()
       this.link.select()
-      this.state.textContent = 'Select and copy the one-time link manually.'
+      this.state.textContent = 'Select and copy the session link manually.'
     }
   }
 }

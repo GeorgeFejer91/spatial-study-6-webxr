@@ -4,9 +4,9 @@
  */
 export const QUESTIONNAIRE_VISUAL_AUTHORITY = {
   sourceRepository: 'MesmerPrism/spatial-study-6',
-  sourceRevision: 'dd41646e02e4a1d73b990626b74048d34ce8f26a',
-  sourceTree: '0764bcfad349aee20724b3a8fe50c776410fe3d3',
-  upstreamRevision: '994498c9299b3f5d5475047eb32022b629a83473',
+  sourceRevision: '384935890d8ba29a2851002163352019d65768f6',
+  sourceTree: '3bdba70e545b7b9224c0e8469b49d64b405b24b9',
+  legacyUpstreamRevision: '994498c9299b3f5d5475047eb32022b629a83473',
   sourceFile:
     'src/spatial-hand-lab-android/app/src/main/java/io/github/mesmerprism/spatialstudy6/handlab/SpatialStudy6QuestionnairePanel.kt',
 } as const

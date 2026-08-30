@@ -36,6 +36,23 @@ classification, and hashes are recorded in
 The authoritative asset licensing index is
 `public/assets/manifests/asset-licenses.v1.json`.
 
+## Vendored Browser Remote Sync Protocol core
+
+`src/companion/vendor/browser-remote-sync-protocol/brsp.js` is an unmodified
+copy of the transport-neutral BRSP/1 reference core from
+<https://github.com/GeorgeFejer91/browser-remote-sync-protocol>, version
+`0.1.0`, pinned to commit
+`17b5cdba9d4ac01d6d70bfccf83daf492b5e3d11`. It is distributed under the MIT
+License, Copyright (c) 2026 George Fejer. Its complete license, source hashes,
+and provenance are retained alongside the source in
+`src/companion/vendor/browser-remote-sync-protocol/`.
+
+Only the transport-neutral core is vendored. The upstream VDO.Ninja adapter
+is not included; this application's transport adapter and TypeScript
+declaration remain AGPL-3.0-only application code. The adjacent Study 6 wrapper
+adds fail-closed conflicting-command-ID detection without modifying the pinned
+upstream source.
+
 ## Vendored VDO.Ninja SDK
 
 `public/vendor/vdoninja/1.5.5/vdoninja-sdk.js` is an unmodified copy of the

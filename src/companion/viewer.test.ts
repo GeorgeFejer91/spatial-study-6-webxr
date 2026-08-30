@@ -1,153 +1,360 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { CompanionHost } from './host'
 import {
   createPairingDescriptor,
-  decryptCompanionMessage,
-  encryptCompanionMessage,
-  nowIso,
+  decodePairingDescriptor,
   type CompanionStatus,
-  type EncryptedEnvelope,
+  type RemoteCommandName,
 } from './protocol'
-import { CompanionViewer } from './viewer'
+import { CompanionViewer, type CommandAcknowledgement } from './viewer'
+import type { VdoNinjaSdk, VdoOpenChannelOptions } from './vdo-sdk'
 
-interface SentPacket {
-  data: unknown
-  target: unknown
+class LinkedChannel extends EventTarget {
+  readonly label: string
+  readonly ordered: boolean
+  readonly maxRetransmits: number | null
+  readonly maxPacketLifeTime: number | null
+  readyState: RTCDataChannelState = 'open'
+  bufferedAmount = 0
+  bufferedAmountLowThreshold = 0
+  binaryType: BinaryType = 'blob'
+  peer: LinkedChannel | null = null
+
+  constructor(label: string, options: VdoOpenChannelOptions = {}) {
+    super()
+    this.label = `x-${label}`
+    this.ordered = options.ordered ?? true
+    this.maxRetransmits = options.maxRetransmits ?? null
+    this.maxPacketLifeTime = options.maxPacketLifeTime ?? null
+  }
+
+  send(data: string): void {
+    if (this.readyState !== 'open') throw new Error('The linked channel is closed.')
+    const peer = this.peer
+    window.setTimeout(() => {
+      if (peer?.readyState === 'open') peer.dispatchEvent(new MessageEvent('message', { data }))
+    }, 0)
+  }
+
+  close(): void {
+    if (this.readyState === 'closed') return
+    this.finishClose()
+    const peer = this.peer
+    window.setTimeout(() => peer?.finishClose(), 0)
+  }
+
+  private finishClose(): void {
+    if (this.readyState === 'closed') return
+    this.readyState = 'closed'
+    this.dispatchEvent(new Event('close'))
+  }
 }
 
-class FakeVdoSdk extends EventTarget {
-  static readonly VERSION = '1.5.5'
-  static instance: FakeVdoSdk | null = null
+class FakeNetwork {
+  private sequence = 0
+  readonly peers = new Map<string, FakeSdk>()
+  readonly publishers = new Map<string, FakeSdk>()
 
-  readonly sent: SentPacket[] = []
+  register(sdk: FakeSdk): string {
+    const peerId = `vdo_peer_${++this.sequence}`
+    this.peers.set(peerId, sdk)
+    return peerId
+  }
+
+  view(controller: FakeSdk, streamId: string): void {
+    const target = this.publishers.get(streamId)
+    if (!target) throw new Error(`No publisher for ${streamId}.`)
+    target.dispatchEvent(new CustomEvent('dataChannelOpen', {
+      detail: { uuid: controller.peerId, type: 'publisher', streamID: streamId },
+    }))
+  }
+
+  open(
+    target: FakeSdk,
+    controllerId: string,
+    label: string,
+    options: VdoOpenChannelOptions,
+  ): RTCDataChannel {
+    const controller = this.peers.get(controllerId)
+    if (!controller) throw new Error(`No controller peer ${controllerId}.`)
+    const local = new LinkedChannel(label, options)
+    const remote = new LinkedChannel(label, options)
+    local.peer = remote
+    remote.peer = local
+    controller.dispatchEvent(new CustomEvent('channelOpen', {
+      detail: {
+        uuid: target.peerId,
+        streamID: target.publishedStreamId,
+        label: remote.label,
+        channel: remote as unknown as RTCDataChannel,
+      },
+    }))
+    return local as unknown as RTCDataChannel
+  }
+
+  reset(): void {
+    this.sequence = 0
+    this.peers.clear()
+    this.publishers.clear()
+  }
+}
+
+const network = new FakeNetwork()
+
+class FakeSdk extends EventTarget implements VdoNinjaSdk {
+  static readonly VERSION = '1.5.5'
+
+  readonly peerId: string
   readonly options: Record<string, unknown>
+  publishedStreamId: string | undefined
 
   constructor(options: Record<string, unknown> = {}) {
     super()
     this.options = options
-    FakeVdoSdk.instance = this
+    this.peerId = network.register(this)
   }
 
   async connect(): Promise<void> {}
+
   async joinRoom(_options: { room: string; password?: string | false }): Promise<void> {}
-  async publish(_stream: MediaStream, options: { streamID: string }): Promise<string> {
+
+  async publish(
+    _stream: MediaStream,
+    options: { streamID: string; label: string; room?: string; password?: string | false },
+  ): Promise<string> {
+    this.publishedStreamId = options.streamID
+    network.publishers.set(options.streamID, this)
     return options.streamID
   }
-  async view(): Promise<RTCPeerConnection | null> {
+
+  async view(
+    streamId: string,
+    _options: { audio: boolean; video: boolean; label?: string },
+  ): Promise<RTCPeerConnection | null> {
+    network.view(this, streamId)
     return null
   }
-  sendData(data: unknown, target?: unknown): boolean {
-    this.sent.push({ data, target })
+
+  sendData(
+    _data: unknown,
+    _target?: {
+      uuid?: string
+      streamID?: string
+      preference?: 'publisher' | 'viewer' | 'any' | 'all'
+    },
+  ): boolean {
     return true
   }
+
+  async openChannel(
+    uuid: string,
+    label: string,
+    options: VdoOpenChannelOptions = {},
+  ): Promise<RTCDataChannel> {
+    return network.open(this, uuid, label, options)
+  }
+
   async disconnect(): Promise<void> {}
 }
 
-function sdk(): FakeVdoSdk {
-  const instance = FakeVdoSdk.instance
-  if (!instance) throw new Error('Fake SDK was not constructed.')
-  return instance
+function makeStatus(revision = 7): CompanionStatus {
+  return {
+    revision,
+    phase: 'stimulus',
+    route: 'immersive-vr',
+    language: 'en',
+    xrPresenting: true,
+    participantActive: true,
+    blockOrdinal: 2,
+    condition: 'HC_HE',
+    mediaElapsedSeconds: 12,
+    mediaDurationSeconds: 300,
+    mediaPaused: false,
+    storageHealthy: true,
+    authority: 'webxr_experiment_owner',
+    bridgeConnected: true,
+    recordingState: 'recording',
+    recordingRevision: 12,
+    recordingMarkerCount: 3,
+    recordingSamplesWritten: 1_300,
+    recordingDroppedBatches: 0,
+    recordingArtifactOpen: true,
+    recordingDurable: true,
+    polarPhase: 'streaming',
+    polarReady: true,
+    polarReadinessReason: 'Real 130 Hz ECG is stable and durable.',
+    heartRateBpm: 64,
+    ecgSampleRateHz: 130,
+    ecgSampleCount: 1_300,
+    lastEcgSampleAgeMs: 12,
+    polarWriterHealthy: true,
+    polarReconnectCount: 0,
+    polarGapCount: 0,
+    startPreflightReady: true,
+    lastReceiptStage: 'observed',
+    remoteControlEnabled: true,
+    remoteAdvanceAllowed: false,
+    remoteBackAllowed: false,
+    remoteStartAllowed: false,
+    remoteAbortAllowed: true,
+    remoteFinalizeAllowed: false,
+    remoteExportAllowed: true,
+  }
 }
 
-function dispatchSdkEvent(type: string, detail: unknown): void {
-  sdk().dispatchEvent(new CustomEvent(type, { detail }))
+function testCanvas(): HTMLCanvasElement {
+  const track = { stop: vi.fn() }
+  const stream = {
+    getVideoTracks: () => [track],
+    getTracks: () => [track],
+  } as unknown as MediaStream
+  const canvas = document.createElement('canvas')
+  Object.defineProperty(canvas, 'captureStream', { value: () => stream })
+  return canvas
 }
 
-const status: CompanionStatus = {
-  revision: 7,
-  phase: 'stimulus',
-  route: 'immersive-vr',
-  language: 'en',
-  xrPresenting: true,
-  participantActive: true,
-  blockOrdinal: 2,
-  condition: 'HC_HE',
-  mediaElapsedSeconds: 12,
-  mediaDurationSeconds: 300,
-  mediaPaused: false,
-  storageHealthy: true,
-  remoteAdvanceAllowed: false,
-  remoteBackAllowed: false,
-  remoteStartAllowed: false,
-}
-
-describe('companion viewer control channel', () => {
+describe('companion viewer BRSP controller', () => {
   afterEach(() => {
     delete window.VDONinjaSDK
-    FakeVdoSdk.instance = null
+    network.reset()
   })
 
-  it('authenticates the publisher direction and carries the latest expected revision', async () => {
-    window.VDONinjaSDK = FakeVdoSdk
-    const descriptor = createPairingDescriptor()
-    const viewer = new CompanionViewer(descriptor)
-    await viewer.connect()
-
-    expect(sdk().options.password).toBe(`s6-vdo-v1-${descriptor.key}`)
-    dispatchSdkEvent('dataChannelOpen', {
-      uuid: 'publisher-peer',
-      type: 'viewer',
-      streamID: descriptor.streamId,
-    })
-    await vi.waitFor(() => expect(sdk().sent).toHaveLength(1))
-    const hello = await decryptCompanionMessage(
-      descriptor.key,
-      sdk().sent[0]?.data as EncryptedEnvelope,
+  it('uses the latest authoritative WebXR revision and receives an applied acknowledgement', async () => {
+    window.VDONinjaSDK = FakeSdk
+    let currentStatus = makeStatus()
+    const handleCommand = vi.fn(
+      async (
+        name: Exclude<RemoteCommandName, 'request_status'>,
+        expectedRevision: number,
+      ) => {
+        currentStatus = {
+          ...currentStatus,
+          revision: expectedRevision + 1,
+          mediaPaused: name === 'pause_media',
+        }
+        return { accepted: true, code: 'paused', message: 'Media paused.' }
+      },
     )
-    expect(hello).toMatchObject({ kind: 'hello', role: 'companion', sequence: 0 })
-    expect(sdk().sent[0]?.target).toEqual({ uuid: 'publisher-peer', preference: 'viewer' })
+    const host = new CompanionHost({ getStatus: () => currentStatus, handleCommand })
+    let viewer: CompanionViewer | undefined
 
-    const statusReceived = new Promise<void>((resolve) => {
-      viewer.addEventListener('status', () => resolve(), { once: true })
-    })
-    dispatchSdkEvent('dataReceived', {
-      uuid: 'publisher-peer',
-      streamID: descriptor.streamId,
-      data: await encryptCompanionMessage(descriptor.key, {
-        protocol: 'spatial-study-6-companion/v1',
-        kind: 'hello',
-        role: 'experiment',
-        sequence: 10,
-        sentAt: nowIso(),
-      }),
-    })
-    await vi.waitFor(() => expect(sdk().sent).toHaveLength(2))
-    const initialStatusRequest = await decryptCompanionMessage(
-      descriptor.key,
-      sdk().sent[1]?.data as EncryptedEnvelope,
-    )
-    expect(initialStatusRequest).toMatchObject({
-      kind: 'command',
-      name: 'request_status',
-      expectedRevision: 0,
-      sequence: 1,
-    })
+    try {
+      const started = await host.start(testCanvas())
+      const descriptor = decodePairingDescriptor(new URL(started.pairingUrl ?? '').hash)
+      viewer = new CompanionViewer(descriptor)
+      const statuses: CompanionStatus[] = []
+      const acknowledgements: CommandAcknowledgement[] = []
+      viewer.addEventListener('status', (event) => {
+        statuses.push((event as CustomEvent<CompanionStatus>).detail)
+      })
+      viewer.addEventListener('ack', (event) => {
+        acknowledgements.push((event as CustomEvent<CommandAcknowledgement>).detail)
+      })
 
-    dispatchSdkEvent('dataReceived', {
-      uuid: 'publisher-peer',
-      streamID: descriptor.streamId,
-      data: await encryptCompanionMessage(descriptor.key, {
-        protocol: 'spatial-study-6-companion/v1',
-        kind: 'status',
-        sequence: 11,
-        sentAt: nowIso(),
-        status,
-      }),
-    })
-    await statusReceived
-    await viewer.sendCommand('pause_media')
-    expect(sdk().sent).toHaveLength(3)
-    const pause = await decryptCompanionMessage(
-      descriptor.key,
-      sdk().sent[2]?.data as EncryptedEnvelope,
-    )
-    expect(pause).toMatchObject({
-      kind: 'command',
-      name: 'pause_media',
-      expectedRevision: 7,
-      sequence: 2,
-    })
+      await viewer.connect()
+      await vi.waitFor(() => {
+        expect(viewer?.snapshot()).toMatchObject({
+          phase: 'connected',
+          peerConnected: true,
+          controlProtocol: 'brsp/1',
+          stateStale: false,
+        })
+        expect(statuses.some(({ revision }) => revision === 7)).toBe(true)
+      }, { timeout: 3_000 })
 
-    await viewer.stop()
+      const commandId = await viewer.sendCommand('pause_media')
+      await vi.waitFor(() => {
+        expect(acknowledgements.find((entry) => entry.commandId === commandId)).toMatchObject({
+          accepted: true,
+          code: 'paused',
+          resultingRevision: 8,
+        })
+        expect(statuses.some(({ revision, mediaPaused, remoteCommandReceiptId }) => (
+          revision === 8
+          && mediaPaused
+          && remoteCommandReceiptId === commandId
+        ))).toBe(true)
+      }, { timeout: 3_000 })
+      expect(handleCommand).toHaveBeenCalledWith('pause_media', 7)
+    } finally {
+      await viewer?.stop()
+      await host.stop()
+    }
+  })
+
+  it('does not clear a command barrier with an older equal-revision status', () => {
+    const viewer = new CompanionViewer(createPairingDescriptor())
+    const expectedCommandId = 'cmd_expected1234'
+    Reflect.set(viewer, 'latestRevision', 7)
+    Reflect.set(viewer, 'awaitingStatusCommandId', expectedCommandId)
+
+    const acceptStatus = viewer as unknown as {
+      acceptStatus: (status: CompanionStatus, revision: number) => void
+    }
+    acceptStatus.acceptStatus({
+      ...makeStatus(7),
+      remoteCommandReceiptId: 'cmd_older123456',
+    }, 7)
+    expect(viewer.snapshot().commandGateBlocked).toBe(true)
+
+    acceptStatus.acceptStatus({
+      ...makeStatus(7),
+      remoteCommandReceiptId: expectedCommandId,
+    }, 7)
+    expect(viewer.snapshot().commandGateBlocked).toBe(false)
+  })
+
+  it('keeps controls gated until this connection receives authoritative status', () => {
+    const viewer = new CompanionViewer(createPairingDescriptor())
+    expect(viewer.snapshot().commandGateBlocked).toBe(true)
+
+    const acceptStatus = viewer as unknown as {
+      acceptStatus: (status: CompanionStatus, revision: number) => void
+    }
+    acceptStatus.acceptStatus(makeStatus(7), 7)
+    expect(viewer.snapshot().commandGateBlocked).toBe(false)
+  })
+
+  it('keeps state-changing controls gated while authoritative status is stale', () => {
+    const viewer = new CompanionViewer(createPairingDescriptor())
+    Reflect.set(viewer, 'stateStale', true)
+
+    expect(viewer.snapshot()).toMatchObject({
+      stateStale: true,
+      commandGateBlocked: true,
+    })
+  })
+
+  it('never reaches ready when the controller uses a different pairing key', async () => {
+    window.VDONinjaSDK = FakeSdk
+    const status = makeStatus()
+    const host = new CompanionHost({
+      getStatus: () => status,
+      handleCommand: () => ({ accepted: true, code: 'unused', message: 'Unused.' }),
+    })
+    let viewer: CompanionViewer | undefined
+
+    try {
+      const started = await host.start(testCanvas())
+      const descriptor = decodePairingDescriptor(new URL(started.pairingUrl ?? '').hash)
+      const wrongKey = createPairingDescriptor().key
+      viewer = new CompanionViewer({ ...descriptor, key: wrongKey })
+      const statusListener = vi.fn()
+      viewer.addEventListener('status', statusListener)
+
+      await viewer.connect()
+      await vi.waitFor(() => {
+        const authenticationFailed = viewer?.snapshot().phase === 'error'
+          || /proof failed|rejected/iu.test(host.snapshot().message)
+        expect(authenticationFailed).toBe(true)
+      }, { timeout: 3_000 })
+      expect(host.snapshot().viewerCount).toBe(0)
+      expect(viewer.snapshot().peerConnected).toBe(false)
+      expect(statusListener).not.toHaveBeenCalled()
+    } finally {
+      await viewer?.stop()
+      await host.stop()
+    }
   })
 })

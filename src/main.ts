@@ -6,6 +6,7 @@ import {
   type StudyPanelActions,
 } from './app/panel-renderer.ts'
 import { StudySceneRoot } from './app/scene-root.ts'
+import { createDefaultStudyBridgeClient } from './bridge/index.ts'
 import { StudyMediaPlayer } from './media/player.ts'
 import { createBrowserStudyShell, SpatialStudyPanel } from './ui/index.ts'
 import { createStudyXRRuntime } from './xr/index.ts'
@@ -14,6 +15,12 @@ import type { StudyXRRuntime } from './xr/study-xr-runtime.ts'
 const app = document.querySelector<HTMLElement>('#app')
 if (!app) throw new Error('Spatial Study 6 root element is missing.')
 app.replaceChildren()
+
+// WebXR always owns the experiment reducer. The deployed route additionally
+// requires the native sensor recorder; disabling it is an explicit
+// participant-ineligible questionnaire/UI rehearsal.
+const sensorDisabledRehearsal =
+  new URLSearchParams(window.location.search).get('sensor') === 'disabled-rehearsal'
 
 const shell = createBrowserStudyShell(app)
 let runtime: StudyXRRuntime
@@ -58,7 +65,13 @@ const actionProxy: StudyPanelActions = {
   startNewSession: () => liveActions?.startNewSession(),
 }
 const panelRenderer = new StudyPanelRenderer(panel, actionProxy)
-controller = new StudyController({ shell, runtime, media, panelRenderer })
+controller = new StudyController({
+  shell,
+  runtime,
+  media,
+  panelRenderer,
+  ...(sensorDisabledRehearsal ? {} : { bridge: createDefaultStudyBridgeClient() }),
+})
 liveActions = controller.createPanelActions()
 
 shell.enterVRButton.addEventListener('click', () => void controller?.toggleXR())
