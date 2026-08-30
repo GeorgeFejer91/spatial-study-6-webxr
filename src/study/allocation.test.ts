@@ -20,8 +20,9 @@ describe("frozen Study 6 allocation", () => {
     expect(participantPool("SHD")).toEqual(
       Array.from({ length: 24 }, (_, index) => `PI${index + 1}`),
     )
-    expect(availableParticipantIds("DHS", ["ph1", "PH24"])).not.toContain("PH1")
-    expect(availableParticipantIds("DHS", ["ph1", "PH24"])).not.toContain("PH24")
+    expect(availableParticipantIds("DHS", ["ph1", "PH24"])).toEqual(
+      participantPool("DHS"),
+    )
   })
 
   it("generates the same recursive 24 permutations for conditions and audio", () => {
@@ -60,12 +61,12 @@ describe("frozen Study 6 allocation", () => {
     expect(blockPlan("PI1", "SHD", "en", 1).mediaId).toBe("Env_HC_HE")
   })
 
-  it("rejects reuse and IDs belonging to the other variant while allowing manual IDs", () => {
-    expect(participantIdViolation("PI1", "DHS")).toBe("participant_id_other_variant")
-    expect(participantIdViolation("PH1", "SHD")).toBe("participant_id_other_variant")
-    expect(participantIdViolation("manual_01", "DHS", ["MANUAL_01"])).toBe(
-      "participant_id_already_used",
-    )
+  it("keeps every valid participant ID selectable regardless of prior use or prefix", () => {
+    expect(participantIdViolation("PI1", "DHS")).toBeNull()
+    expect(participantIdViolation("PH1", "SHD")).toBeNull()
+    expect(participantIdViolation("manual_01", "DHS", ["MANUAL_01"])).toBeNull()
     expect(participantIdViolation("TEST_WEB_01", "DHS")).toBeNull()
+    expect(participantIdViolation("", "DHS")).toBe("participant_id_required")
+    expect(participantIdViolation("bad id", "DHS")).toBe("participant_id_malformed")
   })
 })

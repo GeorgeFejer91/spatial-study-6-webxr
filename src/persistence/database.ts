@@ -3,7 +3,7 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import { asJsonValue, canonicalJson, sha256, type JsonValue } from './json'
 
 export const STUDY_DATABASE_NAME = 'spatial-study-6-webxr'
-export const STUDY_DATABASE_VERSION = 1
+export const STUDY_DATABASE_VERSION = 2
 
 export interface ParticipantReservation {
   participantId: string
@@ -11,6 +11,15 @@ export interface ParticipantReservation {
   permutation: number
   sessionId: string
   reservedAt: string
+}
+
+export interface ParticipantProgress {
+  participantId: string
+  completedBlocks: number
+  completedDatasets: number
+  hasIncompleteDataset: boolean
+  completedConditions: string[]
+  resumableSessionId: string | null
 }
 
 export interface SessionHeader {
@@ -79,6 +88,11 @@ interface StudyDatabaseSchema extends DBSchema {
     key: string
     value: ParticipantReservation
     indexes: { 'by-session': string }
+  }
+  participantDatasets: {
+    key: string
+    value: ParticipantReservation
+    indexes: { 'by-participant': string }
   }
   sessions: {
     key: string
@@ -157,6 +171,28 @@ async function stateRevision(
   }
 }
 
+function questionnaireProgress(state: JsonValue): {
+  completedBlocks: number
+  completedConditions: string[]
+  dataSetComplete: boolean
+} {
+  const blocks = objectField(state, 'blocks')
+  if (!Array.isArray(blocks)) {
+    return { completedBlocks: 0, completedConditions: [], dataSetComplete: false }
+  }
+  const completedConditions: string[] = []
+  for (const block of blocks) {
+    if (block === null || Array.isArray(block) || typeof block !== 'object') continue
+    if (block.questionnaire === null || block.questionnaire === undefined) continue
+    if (typeof block.conditionId === 'string') completedConditions.push(block.conditionId)
+  }
+  return {
+    completedBlocks: completedConditions.length,
+    completedConditions,
+    dataSetComplete: blocks.length === 4 && completedConditions.length === 4,
+  }
+}
+
 export class StudyDatabase {
   private readonly database: IDBPDatabase<StudyDatabaseSchema>
 
@@ -166,40 +202,61 @@ export class StudyDatabase {
 
   static async open(name = STUDY_DATABASE_NAME): Promise<StudyDatabase> {
     const database = await openDB<StudyDatabaseSchema>(name, STUDY_DATABASE_VERSION, {
-      upgrade(db) {
-        db.createObjectStore('meta', { keyPath: 'key' })
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          db.createObjectStore('meta', { keyPath: 'key' })
 
-        const participants = db.createObjectStore('participants', { keyPath: 'participantId' })
-        participants.createIndex('by-session', 'sessionId', { unique: true })
+          const participants = db.createObjectStore('participants', { keyPath: 'participantId' })
+          participants.createIndex('by-session', 'sessionId', { unique: true })
 
-        const sessions = db.createObjectStore('sessions', { keyPath: 'sessionId' })
-        sessions.createIndex('by-updated', 'updatedAt')
+          const sessions = db.createObjectStore('sessions', { keyPath: 'sessionId' })
+          sessions.createIndex('by-updated', 'updatedAt')
 
-        const revisions = db.createObjectStore('sessionRevisions', {
-          keyPath: ['sessionId', 'revision'],
-        })
-        revisions.createIndex('by-session', 'sessionId')
+          const revisions = db.createObjectStore('sessionRevisions', {
+            keyPath: ['sessionId', 'revision'],
+          })
+          revisions.createIndex('by-session', 'sessionId')
 
-        const events = db.createObjectStore('events', { keyPath: ['sessionId', 'sequence'] })
-        events.createIndex('by-session', 'sessionId')
+          const events = db.createObjectStore('events', { keyPath: ['sessionId', 'sequence'] })
+          events.createIndex('by-session', 'sessionId')
 
-        const responses = db.createObjectStore('responses', {
-          keyPath: ['sessionId', 'responseId'],
-        })
-        responses.createIndex('by-session', 'sessionId')
+          const responses = db.createObjectStore('responses', {
+            keyPath: ['sessionId', 'responseId'],
+          })
+          responses.createIndex('by-session', 'sessionId')
 
-        const receipts = db.createObjectStore('receipts', {
-          keyPath: ['sessionId', 'ordinal'],
-        })
-        receipts.createIndex('by-session', 'sessionId')
+          const receipts = db.createObjectStore('receipts', {
+            keyPath: ['sessionId', 'ordinal'],
+          })
+          receipts.createIndex('by-session', 'sessionId')
 
-        const exports = db.createObjectStore('exports', {
-          keyPath: ['sessionId', 'revision'],
-        })
-        exports.createIndex('by-session', 'sessionId')
+          const exports = db.createObjectStore('exports', {
+            keyPath: ['sessionId', 'revision'],
+          })
+          exports.createIndex('by-session', 'sessionId')
+        }
+        if (oldVersion < 2) {
+          const datasets = db.createObjectStore('participantDatasets', { keyPath: 'sessionId' })
+          datasets.createIndex('by-participant', 'participantId')
+        }
       },
     })
-    return new StudyDatabase(database)
+    const study = new StudyDatabase(database)
+    await study.migrateLegacyParticipantReservations()
+    return study
+  }
+
+  private async migrateLegacyParticipantReservations(): Promise<void> {
+    const transaction = this.database.transaction(
+      ['participants', 'participantDatasets'],
+      'readwrite',
+    )
+    const legacy = await transaction.objectStore('participants').getAll()
+    const datasets = transaction.objectStore('participantDatasets')
+    for (const reservation of legacy) {
+      if (!(await datasets.get(reservation.sessionId))) await datasets.put(reservation)
+    }
+    await transaction.done
   }
 
   close(): void {
@@ -215,13 +272,13 @@ export class StudyDatabase {
     const now = timestamp()
     const revision = await stateRevision(reservation.sessionId, 0, state, now)
     const transaction = this.database.transaction(
-      ['participants', 'sessions', 'sessionRevisions', 'receipts', 'meta'],
+      ['participantDatasets', 'sessions', 'sessionRevisions', 'receipts', 'meta'],
       'readwrite',
     )
 
     const sessions = transaction.objectStore('sessions')
-    if (await transaction.objectStore('participants').get(reservation.participantId)) {
-      throw new Error(`Participant ID ${reservation.participantId} is already reserved on this device.`)
+    if (await transaction.objectStore('participantDatasets').get(reservation.sessionId)) {
+      throw new Error(`Participant data set ${reservation.sessionId} already exists.`)
     }
     if (await sessions.get(reservation.sessionId)) {
       throw new Error(`Session ${reservation.sessionId} already exists.`)
@@ -252,7 +309,9 @@ export class StudyDatabase {
       }
     }
 
-    await transaction.objectStore('participants').add({ ...reservation, reservedAt: now })
+    await transaction
+      .objectStore('participantDatasets')
+      .add({ ...reservation, reservedAt: now })
     await sessions.add({
       sessionId: reservation.sessionId,
       participantId: reservation.participantId,
@@ -444,7 +503,7 @@ export class StudyDatabase {
     revision: SessionRevision
   } | null> {
     const transaction = this.database.transaction(
-      ['meta', 'sessions', 'sessionRevisions', 'participants', 'receipts'],
+      ['meta', 'sessions', 'sessionRevisions', 'participantDatasets', 'participants', 'receipts'],
       'readonly',
     )
     const active = await transaction.objectStore('meta').get(ACTIVE_SESSION_KEY)
@@ -466,14 +525,20 @@ export class StudyDatabase {
       transaction
         .objectStore('sessionRevisions')
         .get([header.sessionId, header.latestRevision]),
-      transaction.objectStore('participants').get(header.participantId),
+      transaction.objectStore('participantDatasets').get(header.sessionId),
       transaction.objectStore('receipts').index('by-session').getAll(header.sessionId),
     ])
     await transaction.done
     if (!revision) {
       throw new Error(`Session ${header.sessionId} is missing its latest durable revision.`)
     }
-    if (!reservation || reservation.sessionId !== header.sessionId) {
+    const legacyReservation = reservation
+      ? null
+      : await this.database.get('participants', header.participantId)
+    if (
+      (!reservation || reservation.participantId !== header.participantId) &&
+      (!legacyReservation || legacyReservation.sessionId !== header.sessionId)
+    ) {
       throw new Error(`Session ${header.sessionId} has no matching participant reservation.`)
     }
     if (receipts.length > 0) {
@@ -488,11 +553,101 @@ export class StudyDatabase {
   }
 
   async participantIsReserved(participantId: string): Promise<boolean> {
-    return Boolean(await this.database.get('participants', participantId))
+    return (
+      (await this.database.getAllFromIndex(
+        'participantDatasets',
+        'by-participant',
+        participantId,
+      )).length > 0
+    )
   }
 
   async listParticipants(): Promise<ParticipantReservation[]> {
-    return this.database.getAll('participants')
+    return this.database.getAll('participantDatasets')
+  }
+
+  async listParticipantProgress(pool?: 'PH' | 'PI'): Promise<ParticipantProgress[]> {
+    const [datasets, headers] = await Promise.all([
+      this.database.getAll('participantDatasets'),
+      this.database.getAll('sessions'),
+    ])
+    const headersBySession = new Map(headers.map((header) => [header.sessionId, header]))
+    const revisions = await Promise.all(
+      datasets.filter((dataset) => pool === undefined || dataset.pool === pool).map(async (dataset) => {
+        const header = headersBySession.get(dataset.sessionId)
+        if (!header) return null
+        const revision = await this.database.get('sessionRevisions', [
+          header.sessionId,
+          header.latestRevision,
+        ])
+        return revision ? { dataset, header, revision } : null
+      }),
+    )
+
+    const grouped = new Map<string, NonNullable<(typeof revisions)[number]>[]>()
+    for (const candidate of revisions) {
+      if (!candidate) continue
+      const key = candidate.dataset.participantId.trim().toUpperCase()
+      const values = grouped.get(key) ?? []
+      values.push(candidate)
+      grouped.set(key, values)
+    }
+
+    return Array.from(grouped, ([participantId, values]) => {
+      const projected = values.map((value) => ({
+        ...value,
+        progress: questionnaireProgress(value.revision.state),
+      }))
+      const completedDatasets = projected.filter(
+        (value) => value.progress.dataSetComplete,
+      ).length
+      const incomplete = projected
+        .filter((value) => !value.progress.dataSetComplete && !value.header.finalized)
+        .sort((left, right) => right.header.updatedAt.localeCompare(left.header.updatedAt))[0]
+      const display =
+        incomplete ??
+        projected
+          .filter((value) => value.progress.dataSetComplete)
+          .sort((left, right) => right.header.updatedAt.localeCompare(left.header.updatedAt))[0]
+      return {
+        participantId,
+        completedBlocks: display?.progress.completedBlocks ?? 0,
+        completedDatasets,
+        hasIncompleteDataset: incomplete !== undefined,
+        completedConditions: display?.progress.completedConditions ?? [],
+        resumableSessionId: incomplete?.header.sessionId ?? null,
+      }
+    }).sort((left, right) => left.participantId.localeCompare(right.participantId))
+  }
+
+  async recoverParticipantSession(participantId: string, pool?: 'PH' | 'PI'): Promise<{
+    header: SessionHeader
+    revision: SessionRevision
+  } | null> {
+    const normalized = participantId.trim().toUpperCase()
+    const progress = (await this.listParticipantProgress(pool)).find(
+      (candidate) => candidate.participantId === normalized,
+    )
+    if (!progress?.resumableSessionId) return null
+
+    const transaction = this.database.transaction(['meta', 'sessions'], 'readwrite')
+    const sessions = transaction.objectStore('sessions')
+    const target = await sessions.get(progress.resumableSessionId)
+    if (!target || target.finalized || target.participantId !== normalized) {
+      throw new Error('The selected incomplete data set is no longer resumable.')
+    }
+    const active = await transaction.objectStore('meta').get(ACTIVE_SESSION_KEY)
+    if (typeof active?.value === 'string' && active.value !== target.sessionId) {
+      const activeHeader = await sessions.get(active.value)
+      if (activeHeader && !activeHeader.finalized) {
+        throw new Error('A different unfinished data set is already active.')
+      }
+    }
+    await transaction
+      .objectStore('meta')
+      .put({ key: ACTIVE_SESSION_KEY, value: target.sessionId })
+    await transaction.done
+    return this.recoverActiveSession()
   }
 
   async createExportRevision(sessionId: string): Promise<ExportRevision> {
@@ -513,6 +668,7 @@ export class StudyDatabase {
     const payload = asJsonValue({
       format: 'spatial-study-6-webxr-export',
       formatVersion: 1,
+      exportRevision: existingExports.length + 1,
       generatedAt: timestamp(),
       participantIneligible: true,
       header,

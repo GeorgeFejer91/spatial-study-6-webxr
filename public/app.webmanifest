@@ -7,9 +7,18 @@
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "display_override": ["standalone", "browser"],
+  "display_override": ["standalone"],
+  "horizonOSAppMode": "immersive",
   "orientation": "landscape",
   "background_color": "#080b10",
   "theme_color": "#080b10",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
   "categories": ["education", "science"]
 }

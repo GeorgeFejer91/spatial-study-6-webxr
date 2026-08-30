@@ -91,27 +91,19 @@ export function participantPool(variantId: VariantId): string[] {
 
 export function availableParticipantIds(
   variantId: VariantId,
-  usedParticipantIds: readonly string[],
+  _usedParticipantIds: readonly string[] = [],
 ): string[] {
-  const used = new Set(usedParticipantIds.map(normalizeParticipantId))
-  return participantPool(variantId).filter((participantId) => !used.has(participantId))
+  return participantPool(variantId)
 }
 
 export function participantIdViolation(
   participantId: string,
-  variantId: VariantId,
-  usedParticipantIds: readonly string[] = [],
+  _variantId: VariantId,
+  _usedParticipantIds: readonly string[] = [],
 ): string | null {
   const normalized = normalizeParticipantId(participantId)
   if (!normalized) return "participant_id_required"
   if (!/^[A-Z0-9_-]{1,32}$/.test(normalized)) return "participant_id_malformed"
-
-  const officialPrefix = /^(PI|PH)\d+$/.exec(normalized)?.[1]
-  if (officialPrefix && officialPrefix !== variantSpec(variantId).participantPrefix) {
-    return "participant_id_other_variant"
-  }
-  const used = new Set(usedParticipantIds.map(normalizeParticipantId))
-  if (used.has(normalized)) return "participant_id_already_used"
   return null
 }
 

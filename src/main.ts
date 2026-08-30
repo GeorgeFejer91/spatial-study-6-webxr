@@ -8,6 +8,7 @@ import {
 import { StudySceneRoot } from './app/scene-root.ts'
 import { createDefaultStudyBridgeClient } from './bridge/index.ts'
 import { StudyMediaPlayer } from './media/player.ts'
+import { isVerifiedPackagedPwa } from './pwa/immersive-launch.ts'
 import { createBrowserStudyShell, SpatialStudyPanel } from './ui/index.ts'
 import { createStudyXRRuntime } from './xr/index.ts'
 import type { StudyXRRuntime } from './xr/study-xr-runtime.ts'
@@ -80,7 +81,10 @@ shell.mediaButton.addEventListener('click', () =>
   controller?.onMediaToggleRequest(media.snapshot()),
 )
 
-void controller.initialize().then(() => controller?.checkXRAvailability())
+void controller.initialize().then(async () => {
+  await controller?.checkXRAvailability()
+  if (controller && isVerifiedPackagedPwa()) await controller.toggleXR()
+})
 
 window.addEventListener(
   'pagehide',

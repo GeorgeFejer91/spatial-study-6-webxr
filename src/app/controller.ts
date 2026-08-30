@@ -18,12 +18,14 @@ import {
   exportResponsesCsv,
   StudyDatabase,
   type ExportRevision,
+  type ParticipantProgress,
 } from '../persistence/database.ts'
 import {
   canAdvanceAssessment,
   canGoBackAssessment,
   createInitialExperimentState,
   guardRemoteCommand,
+  normalizeParticipantId,
   permutationNumber,
   reduceStudy,
   remoteStatus,
@@ -63,7 +65,7 @@ export class StudyController {
   private database: StudyDatabase | null = null
   private state: ExperimentState = createInitialExperimentState()
   private durableRevision = -1
-  private usedParticipantIds: string[] = []
+  private participantProgress: ParticipantProgress[] = []
   private storageHealthy = true
   private recoveryBlocked = false
   private sessionFinalized = false
@@ -102,9 +104,7 @@ export class StudyController {
     }
     try {
       this.database = await StudyDatabase.open()
-      this.usedParticipantIds = (await this.database.listParticipants()).map(
-        (participant) => participant.participantId,
-      )
+      this.participantProgress = await this.database.listParticipantProgress()
       const recovered = await this.database.recoverActiveSession()
       if (recovered) {
         const candidate = recovered.revision.state as unknown as ExperimentState
@@ -136,19 +136,14 @@ export class StudyController {
               this.state.page === 'complete' ? 'complete' : 'abandoned',
             )
             this.sessionFinalized = true
-          } else if (this.state.page === 'stimulus') {
-            this.prepareRecoveredMedia()
-            if (this.state.media.status === 'playing') {
-              const paused = await this.applyAction({ type: 'pause_media' })
-              const recoveryNotice = 'Recovered media is paused; resume with a local gesture.'
-              if (paused) {
-                this.localMessage = this.localMessage
-                  ? `${recoveryNotice} ${this.localMessage}`
-                  : recoveryNotice
-              } else {
-                this.recoveryBlocked = true
-                this.localMessage = `Recovery could not save the required paused state: ${this.localMessage}`
-              }
+          } else if (this.incompleteBlockMustRepeat(this.state)) {
+            const blockOrder = this.state.blocks[this.state.currentBlockIndex]?.blockOrder
+            const restarted = await this.restartRecoveredBlock('process_restart')
+            if (restarted) {
+              this.localMessage = `Recovered the unfinished data set. The whole block ${blockOrder} will repeat from its beginning because its questionnaire was incomplete.`
+            } else {
+              this.recoveryBlocked = true
+              this.localMessage = `Recovery could not restart the incomplete block: ${this.localMessage}`
             }
           }
         }
@@ -161,6 +156,41 @@ export class StudyController {
 
     this.initializeCompanionControls()
     this.render()
+  }
+
+  private incompleteBlockMustRepeat(state: ExperimentState): boolean {
+    const block = state.blocks[state.currentBlockIndex]
+    if (!block || block.questionnaire !== null) return false
+    return [
+      'stimulus',
+      'self_assessment_manikin',
+      'affect_vas',
+      'emotion_representation_vas',
+      'hand_embodiment',
+      'technical_hold',
+    ].includes(state.page)
+  }
+
+  private async restartRecoveredBlock(reason: string): Promise<boolean> {
+    const block = this.state.blocks[this.state.currentBlockIndex]
+    const sessionId = this.state.sessionId
+    if (!block || !sessionId) return false
+    const archivedAttemptId = block.attemptId
+    const accepted = await this.applyAction({
+      type: 'restart_incomplete_block',
+      attemptId: `restart-${block.blockOrder}-${crypto.randomUUID()}`,
+      restartedAtUtc: new Date().toISOString(),
+      reason,
+    })
+    if (!accepted || !this.database) return accepted
+    await this.database
+      .appendEvent(sessionId, 'block_attempt_archived_for_repeat', {
+        blockOrder: block.blockOrder,
+        archivedAttemptId,
+        reason,
+      })
+      .catch(() => undefined)
+    return true
   }
 
   private initializeCompanionControls(): void {
@@ -325,9 +355,6 @@ export class StudyController {
           next,
         )
         this.durableRevision = 0
-        this.usedParticipantIds = Array.from(
-          new Set([...this.usedParticipantIds, next.participantId]),
-        ).sort()
       } else if (next.sessionId) {
         if (!this.database) {
           throw new Error('Durable storage is unavailable; the study action was not applied.')
@@ -366,6 +393,7 @@ export class StudyController {
     this.storageHealthy = true
     this.localMessage = ''
     if (action.type === 'start_participant') this.sessionFinalized = false
+    if (action.type === 'configure') await this.refreshParticipantProgress()
 
     let auditWarning = ''
     if (next.sessionId && this.database) {
@@ -461,6 +489,16 @@ export class StudyController {
     mediaPositionMs?: number,
   ): Promise<boolean> {
     if (!this.bridge) return true
+    if (!this.bridgeProjection?.sensorConnected) {
+      this.sensorMessage = `ECG marker ${eventType} was skipped because the Sensor Bridge is disconnected.`
+      if (state.sessionId && this.database) {
+        await this.database
+          .appendEvent(state.sessionId, 'sensor_marker_skipped', { eventType })
+          .catch(() => undefined)
+      }
+      this.render()
+      return false
+    }
     const block = state.blocks[state.currentBlockIndex]
     const marker: BridgeExperimentMarker = {
       markerId: `marker-${crypto.randomUUID()}`,
@@ -522,6 +560,12 @@ export class StudyController {
     }
   }
 
+  private async refreshParticipantProgress(): Promise<void> {
+    if (!this.database || !this.state.configuration) return
+    const prefix = variantSpec(this.state.configuration.variantId).participantPrefix
+    this.participantProgress = await this.database.listParticipantProgress(prefix)
+  }
+
   private async startParticipant(participantId: string): Promise<void> {
     if (!this.database || this.recoveryBlocked) {
       this.storageHealthy = false
@@ -533,11 +577,56 @@ export class StudyController {
     }
     const idAccepted = await this.enqueue({ type: 'set_participant_id', participantId })
     if (!idAccepted) return
+    const configuration = this.state.configuration
+    if (!configuration) return
+    const normalized = normalizeParticipantId(participantId)
+    const prefix = variantSpec(configuration.variantId).participantPrefix
+    try {
+      const recovered = await this.database.recoverParticipantSession(normalized, prefix)
+      if (recovered) {
+        const candidate = recovered.revision.state as unknown as ExperimentState
+        const errors = validateExperimentState(candidate)
+        if (candidate.sessionId !== recovered.header.sessionId) {
+          errors.push('recovery_session_owner_mismatch')
+        }
+        if (candidate.participantId !== normalized) {
+          errors.push('recovery_participant_owner_mismatch')
+        }
+        if (candidate.configuration?.variantId !== configuration.variantId) {
+          errors.push('recovery_variant_mismatch')
+        }
+        if (errors.length > 0) {
+          throw new Error(`Selected data set failed recovery: ${errors.join(', ')}.`)
+        }
+        this.state = candidate
+        this.durableRevision = recovered.header.latestRevision
+        this.sessionFinalized = false
+        this.panelRenderer.resetTransientState()
+        const blockOrder = candidate.blocks[candidate.currentBlockIndex]?.blockOrder ?? 1
+        if (this.incompleteBlockMustRepeat(candidate)) {
+          if (!(await this.restartRecoveredBlock('participant_resume'))) {
+            throw new Error('The questionnaire-incomplete block could not be restarted.')
+          }
+          this.localMessage = `Resumed the newest incomplete data set at block ${blockOrder}; the whole block will repeat.`
+        } else {
+          this.localMessage = `Resumed the newest incomplete data set at block ${blockOrder}.`
+        }
+        await this.refreshParticipantProgress()
+        this.syncMediaVisibility()
+        this.render()
+        return
+      }
+    } catch (error) {
+      this.storageHealthy = false
+      this.localMessage = error instanceof Error ? error.message : String(error)
+      this.render()
+      return
+    }
     await this.enqueue({
       type: 'start_participant',
       sessionId: `s6-${crypto.randomUUID()}`,
       allocatedAtUtc: new Date().toISOString(),
-      usedParticipantIds: this.usedParticipantIds,
+      usedParticipantIds: [],
     })
   }
 
@@ -554,11 +643,9 @@ export class StudyController {
       return false
     }
     if (!this.bridgeStartPreflightReady()) {
-      this.localMessage = this.bridgeProjection?.sensorConnected
-        ? `Block start is gated by the Sensor Bridge: ${this.polar.readinessReason || 'live 130 Hz ECG and a healthy writer are required'}.`
-        : 'Block start requires the connected APK sensor recorder.'
-      this.render()
-      return false
+      this.sensorMessage = this.bridgeProjection?.sensorConnected
+        ? `ECG quality warning: ${this.polar.readinessReason || 'live 130 Hz ECG or its durable writer is not ready'}. Recording may continue, but this block is not ECG-qualified.`
+        : 'ECG quality warning: the APK sensor recorder is disconnected. Recording may continue without ECG qualification.'
     }
     this.blockStartInFlight = true
     try {
@@ -570,11 +657,7 @@ export class StudyController {
         },
         0,
       )
-      if (!(await this.recordSensorMarker('block_start_intent', this.state, 0))) {
-        this.localMessage = 'Block start stopped because the ECG intent marker was not durable.'
-        this.render()
-        return false
-      }
+      const intentRecorded = await this.recordSensorMarker('block_start_intent', this.state, 0)
       await this.media.play()
       const accepted = await this.enqueue({
         type: 'start_block',
@@ -584,10 +667,13 @@ export class StudyController {
         this.media.pause()
         return false
       }
-      if (await this.recordSensorMarker('media_started', this.state, 0)) return true
-      this.media.pause()
-      await this.enterTechnicalHold('sensor_media_start_marker_failed')
-      return false
+      const startedRecorded = await this.recordSensorMarker('media_started', this.state, 0)
+      if (!intentRecorded || !startedRecorded) {
+        this.sensorMessage =
+          'ECG marker warning: the stimulus continued, but one or more sensor markers were not observed.'
+        this.render()
+      }
+      return true
     } catch (error) {
       this.localMessage = error instanceof Error ? error.message : String(error)
       this.media.pause()
@@ -596,22 +682,6 @@ export class StudyController {
     } finally {
       this.blockStartInFlight = false
     }
-  }
-
-  private prepareRecoveredMedia(): void {
-    const block = this.state.blocks[this.state.currentBlockIndex]
-    if (!block) return
-    this.media.load(
-      {
-        videoFile: block.videoFile,
-        audioFile: block.audioFile,
-        durationMs: this.state.media.durationMs,
-      },
-      this.state.media.positionMs,
-    )
-    this.lastMediaRevisionPosition = this.state.media.positionMs
-    this.media.pause()
-    this.syncMediaVisibility()
   }
 
   private syncMediaVisibility(): void {
@@ -710,7 +780,7 @@ export class StudyController {
       remoteControlEnabled: this.controlEnabled,
       remoteAdvanceAllowed: canAdvanceAssessment(this.state),
       remoteBackAllowed: canGoBackAssessment(this.state),
-      remoteStartAllowed: this.bridge ? startPreflightReady : this.state.page === 'block_ready',
+      remoteStartAllowed: this.state.page === 'block_ready',
       remoteAbortAllowed:
         this.state.sessionId !== null &&
         this.state.page !== 'complete' &&
@@ -903,7 +973,7 @@ export class StudyController {
     })
     const displayMessage = [this.localMessage, this.sensorMessage].filter(Boolean).join(' · ')
     this.panelRenderer.render(this.state, {
-      usedParticipantIds: this.usedParticipantIds,
+      participantProgress: this.participantProgress,
       localMessage: displayMessage,
       storageHealthy: this.storageHealthy,
       polar: this.polar,

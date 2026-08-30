@@ -48,6 +48,12 @@ export type StudyAction =
   | { type: "pause_media" }
   | { type: "resume_media" }
   | {
+      type: "restart_incomplete_block"
+      attemptId: string
+      restartedAtUtc: string
+      reason: string
+    }
+  | {
       type: "complete_stimulus"
       observedDurationMs: number
       endedAtUtc: string
@@ -321,6 +327,48 @@ export function reduceStudy(
         return rejected(state, "media_not_paused", "Only paused media can be resumed.")
       }
       return accepted({ ...state, media: { ...state.media, status: "playing" } })
+    }
+    case "restart_incomplete_block": {
+      const block = currentBlock(state)
+      const restartablePage =
+        state.page === "stimulus" ||
+        state.page === "technical_hold" ||
+        assessmentPage(state) !== null
+      if (!state.sessionId || !block || !restartablePage || block.questionnaire !== null) {
+        return rejected(
+          state,
+          "block_restart_not_allowed",
+          "Only a questionnaire-incomplete active block can be restarted.",
+        )
+      }
+      if (!/^[A-Za-z0-9._-]{1,96}$/.test(action.attemptId)) {
+        return rejected(state, "attempt_id_malformed", "Restart attempt ID is malformed.")
+      }
+      if (!validInstant(action.restartedAtUtc)) {
+        return rejected(state, "restart_time_invalid", "Restart time is not RFC 3339.")
+      }
+      if (!/^[a-z0-9_-]{1,64}$/.test(action.reason)) {
+        return rejected(state, "restart_reason_invalid", "Restart reason is malformed.")
+      }
+      return accepted({
+        ...state,
+        page: "block_ready",
+        blocks: replaceCurrentBlock(state, {
+          ...block,
+          attemptId: action.attemptId,
+          status: "pending",
+          questionnaire: null,
+        }),
+        assessmentDraft: emptyAssessmentDraft(),
+        media: {
+          status: "idle",
+          positionMs: 0,
+          durationMs: 0,
+          startedAtUtc: null,
+          endedAtUtc: null,
+        },
+        technicalHoldReason: null,
+      })
     }
     case "complete_stimulus": {
       const block = currentBlock(state)

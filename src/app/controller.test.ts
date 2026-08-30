@@ -35,7 +35,7 @@ interface ControllerInternals {
   sessionFinalized: boolean
   controlEnabled: boolean
   localMessage: string
-  usedParticipantIds: string[]
+  participantProgress: unknown[]
   applyAction(action: StudyAction): Promise<boolean>
   startParticipant(participantId: string): Promise<void>
   companionStatus(): {
@@ -43,6 +43,8 @@ interface ControllerInternals {
     bridgeConnected: boolean
     polarReady: boolean
     lastReceiptStage: string | null
+    startPreflightReady: boolean
+    remoteStartAllowed: boolean
   }
   handleRemoteCommand(
     name: 'start_block' | 'reconnect_sensor' | 'abort_session',
@@ -149,8 +151,9 @@ function databaseFake(overrides: Record<string, unknown> = {}) {
     appendEvent: vi.fn(async () => undefined),
     beginSession: vi.fn(),
     finalizeSession: vi.fn(async () => undefined),
-    listParticipants: vi.fn(async () => []),
+    listParticipantProgress: vi.fn(async () => []),
     recoverActiveSession: vi.fn(async () => null),
+    recoverParticipantSession: vi.fn(async () => null),
     close: vi.fn(),
     ...overrides,
   }
@@ -257,17 +260,14 @@ describe('StudyController runtime durability', () => {
       bridgeConnected: true,
       polarReady: false,
       lastReceiptStage: 'applied',
+      startPreflightReady: false,
     })
 
     fixture.internals.state = blockReadyState()
-    await expect(
-      fixture.internals.handleRemoteCommand(
-        'start_block',
-        fixture.internals.state.revision,
-      ),
-    ).resolves.toMatchObject({ accepted: false, code: 'start_failed' })
-    expect(fixture.media.load).not.toHaveBeenCalled()
-    expect(fixture.internals.localMessage).toContain('gated by the Sensor Bridge')
+    expect(fixture.internals.companionStatus()).toMatchObject({
+      startPreflightReady: false,
+      remoteStartAllowed: true,
+    })
   })
 
   it('waits for the durable start-block revision before acknowledging a remote start', async () => {
@@ -346,15 +346,7 @@ describe('StudyController runtime durability', () => {
     const fixture = controllerFixture()
     const recoveredState = blockReadyState()
     const database = databaseFake({
-      listParticipants: vi.fn(async () => [
-        {
-          participantId: 'PH1',
-          pool: 'PH',
-          permutation: 1,
-          sessionId: 'session-1',
-          reservedAt: '2026-08-29T10:00:00.000Z',
-        },
-      ]),
+      listParticipantProgress: vi.fn(async () => []),
       recoverActiveSession: vi.fn(async () => ({
         header: {
           sessionId: 'session-1',
@@ -380,6 +372,58 @@ describe('StudyController runtime durability', () => {
     await fixture.internals.startParticipant('PH2')
     expect(database.beginSession).not.toHaveBeenCalled()
     expect(fixture.internals.localMessage).toContain('allocation is blocked')
+  })
+
+  it('repeats a recovered block when any questionnaire data is still missing', async () => {
+    const fixture = controllerFixture()
+    let recoveredState = blockReadyState()
+    const archivedAttemptId = recoveredState.blocks[0].attemptId
+    recoveredState = acceptedState(recoveredState, {
+      type: 'start_block',
+      startedAtUtc: '2026-08-29T10:05:00.000Z',
+    })
+    recoveredState = acceptedState(recoveredState, {
+      type: 'complete_stimulus',
+      observedDurationMs: 10_000,
+      endedAtUtc: '2026-08-29T10:05:10.000Z',
+    })
+    recoveredState = acceptedState(recoveredState, {
+      type: 'set_sam',
+      dimension: 'valence',
+      value: 7,
+    })
+    const database = databaseFake({
+      recoverActiveSession: vi.fn(async () => ({
+        header: {
+          sessionId: 'session-1',
+          participantId: 'PH1',
+          createdAt: '2026-08-29T10:00:00.000Z',
+          updatedAt: '2026-08-29T10:05:10.000Z',
+          latestRevision: 8,
+          nextEventSequence: 0,
+          finalized: false,
+        },
+        revision: { state: recoveredState },
+      })),
+    })
+    vi.spyOn(StudyDatabase, 'open').mockResolvedValue(database as unknown as StudyDatabase)
+
+    await fixture.controller.initialize()
+
+    expect(fixture.internals.state.page).toBe('block_ready')
+    expect(fixture.internals.state.blocks[0]).toMatchObject({
+      status: 'pending',
+      questionnaire: null,
+    })
+    expect(fixture.internals.state.blocks[0].attemptId).not.toBe(archivedAttemptId)
+    expect(fixture.internals.state.assessmentDraft.samValence).toBeNull()
+    expect(fixture.internals.localMessage).toContain('whole block 1 will repeat')
+    expect(database.appendRevision).toHaveBeenCalledOnce()
+    expect(database.appendEvent).toHaveBeenCalledWith(
+      'session-1',
+      'block_attempt_archived_for_repeat',
+      expect.objectContaining({ archivedAttemptId, reason: 'process_restart' }),
+    )
   })
 
   it('requires a terminal receipt and clears every transient draft before a new session', () => {

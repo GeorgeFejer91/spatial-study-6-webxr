@@ -6,10 +6,10 @@ import {
   type PolarStatusProjection,
 } from '../bridge/index.ts'
 import {
-  availableParticipantIds,
   conditionDescriptionKey,
   formatStudyText,
   participantIdViolation,
+  participantPool,
   studyText,
   timingLabelKey,
   validateDemographics,
@@ -23,6 +23,7 @@ import {
   type TimingMode,
   type VariantId,
 } from '../study/index.ts'
+import type { ParticipantProgress } from '../persistence/database.ts'
 import {
   createSpatialButton,
   createSystemTextField,
@@ -90,7 +91,7 @@ export interface StudyPanelActions {
 }
 
 export interface StudyPanelRenderContext {
-  usedParticipantIds: readonly string[]
+  participantProgress: readonly ParticipantProgress[]
   localMessage: string
   storageHealthy: boolean
   polar?: PolarStatusProjection
@@ -152,7 +153,7 @@ export class StudyPanelRenderer {
         this.renderSetup()
         break
       case 'participant_id':
-        this.renderParticipant(state, context.usedParticipantIds)
+        this.renderParticipant(state, context.participantProgress)
         break
       case 'demographics':
         this.renderDemographics(language, context.polar ?? disconnectedPolarStatus())
@@ -258,14 +259,118 @@ export class StudyPanelRenderer {
     this.panel.setHeader({ title: studyText(language, 'page.operator_setup.title') })
   }
 
-  private renderParticipant(state: ExperimentState, usedIds: readonly string[]): void {
+  private renderParticipant(
+    state: ExperimentState,
+    progressValues: readonly ParticipantProgress[],
+  ): void {
     const configuration = state.configuration
     if (!configuration) return
     const language = configuration.languageCode
-    const available = availableParticipantIds(configuration.variantId, usedIds)
-    if (!this.participantDraft) this.participantDraft = available[0] ?? ''
-    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 18 })
+    const pool = participantPool(configuration.variantId)
+    const progressById = new Map(
+      progressValues.map((progress) => [progress.participantId, progress]),
+    )
+    if (!this.participantDraft) this.participantDraft = pool[0] ?? ''
+    const progressText = (participantId: string) => {
+      const progress = progressById.get(participantId.trim().toUpperCase())
+      if (!progress) {
+        return language === 'de'
+          ? 'Aktueller Datensatz: 0/4 Fragebogenblöcke. Abgeschlossene Datensätze: 0.'
+          : 'Current data set: 0/4 questionnaire blocks. Completed data sets: 0.'
+      }
+      return language === 'de'
+        ? `Aktueller Datensatz: ${progress.completedBlocks}/4 Fragebogenblöcke. Abgeschlossene Datensätze: ${progress.completedDatasets}.`
+        : `Current data set: ${progress.completedBlocks}/4 questionnaire blocks. Completed data sets: ${progress.completedDatasets}.`
+    }
+    const progressSummary = paragraph(progressText(this.participantDraft), {
+      size: 17,
+      color: STUDY_UI_COLORS.textMuted,
+    })
+    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 12 })
     body.add(paragraph(studyText(language, 'page.participant_id.body'), { size: 21 }))
+    const grid = new Container({
+      width: '100%',
+      flexDirection: 'column',
+      gapRow: 7,
+    })
+    const poolButtons: Array<{ participantId: string; root: Container; label: Text }> = []
+    const projectSelection = () => {
+      const selectedId = this.participantDraft.trim().toUpperCase()
+      for (const button of poolButtons) {
+        const selected = button.participantId === selectedId
+        button.root.setProperties({
+          backgroundColor: selected ? STUDY_UI_COLORS.accentSoft : STUDY_UI_COLORS.panelRaised,
+          borderColor: selected ? STUDY_UI_COLORS.accent : STUDY_UI_COLORS.border,
+          borderWidth: selected ? 2 : 1,
+        })
+        button.label.setProperties({
+          color: selected ? STUDY_UI_COLORS.accentDark : STUDY_UI_COLORS.text,
+        })
+      }
+      progressSummary.setProperties({ text: progressText(selectedId) })
+    }
+    for (let rowIndex = 0; rowIndex < 4; rowIndex += 1) {
+      const row = new Container({ width: '100%', flexDirection: 'row', gapColumn: 7 })
+      for (const participantId of pool.slice(rowIndex * 6, rowIndex * 6 + 6)) {
+        const progress = progressById.get(participantId)
+        const completedBlocks = progress?.completedBlocks ?? 0
+        const completedDatasets = progress?.completedDatasets ?? 0
+        const selected = participantId === this.participantDraft.trim().toUpperCase()
+        const root = new Container({
+          width: 158,
+          height: 63,
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gapRow: 6,
+          backgroundColor: selected ? STUDY_UI_COLORS.accentSoft : STUDY_UI_COLORS.panelRaised,
+          borderColor: selected ? STUDY_UI_COLORS.accent : STUDY_UI_COLORS.border,
+          borderWidth: selected ? 2 : 1,
+          borderRadius: 6,
+          cursor: 'pointer',
+          pointerEvents: 'auto',
+          hover: { backgroundColor: STUDY_UI_COLORS.accentHover },
+          onClick: () => {
+            this.participantDraft = participantId
+            field.setValue(participantId)
+            start.setDisabled(false)
+            projectSelection()
+          },
+        })
+        root.name = `study6-participant-${participantId}`
+        const label = new Text({
+          text: `${participantId}${completedDatasets > 0 ? ` · ${completedDatasets}x` : ''}`,
+          color: selected ? STUDY_UI_COLORS.accentDark : STUDY_UI_COLORS.text,
+          fontSize: 17,
+          fontWeight: 'bold',
+          pointerEvents: 'none',
+        })
+        const segments = new Container({
+          width: 134,
+          height: 6,
+          flexDirection: 'row',
+          gapColumn: 3,
+          pointerEvents: 'none',
+        })
+        segments.name = `study6-participant-${participantId}-segments`
+        for (let index = 0; index < 4; index += 1) {
+          const segment = new Container({
+            width: 31,
+            height: 6,
+            backgroundColor:
+              index < completedBlocks ? STUDY_UI_COLORS.success : STUDY_UI_COLORS.border,
+            borderRadius: 1,
+            pointerEvents: 'none',
+          })
+          segment.name = `study6-participant-${participantId}-segment-${index + 1}`
+          segments.add(segment)
+        }
+        root.add(label, segments)
+        poolButtons.push({ participantId, root, label })
+        row.add(root)
+      }
+      grid.add(row)
+    }
     const field = createSystemTextField({
       ariaLabel: studyText(language, 'participant.manual'),
       placeholder: variantSpec(configuration.variantId).participantPrefix,
@@ -273,31 +378,19 @@ export class StudyPanelRenderer {
       maxLength: 32,
       onValueChange: (value) => {
         this.participantDraft = value.toUpperCase()
-        start.setDisabled(
-          participantIdViolation(this.participantDraft, configuration.variantId, usedIds) !== null,
-        )
-      },
-    })
-    const useNext = createSpatialButton({
-      label: available[0] ? `${studyText(language, 'participant.select_unused')} | ${available[0]}` : studyText(language, 'participant.none_available'),
-      variant: 'secondary',
-      width: 520,
-      disabled: available.length === 0,
-      onActivate: () => {
-        this.participantDraft = available[0] ?? ''
-        field.setValue(this.participantDraft)
-        start.setDisabled(this.participantDraft.length === 0)
+        start.setDisabled(participantIdViolation(this.participantDraft, configuration.variantId) !== null)
+        projectSelection()
       },
     })
     const start = createSpatialButton({
       label: studyText(language, 'button.start_participant'),
       width: 360,
-      disabled:
-        participantIdViolation(this.participantDraft, configuration.variantId, usedIds) !== null,
+      disabled: participantIdViolation(this.participantDraft, configuration.variantId) !== null,
       onActivate: () => this.actions.startParticipant(this.participantDraft),
     })
-    body.add(useNext.root, field.root)
+    body.add(grid, field.root)
     body.add(paragraph(studyText(language, 'participant.manual_note'), { size: 17, color: STUDY_UI_COLORS.textMuted }))
+    body.add(progressSummary)
     body.add(start.root)
     this.panel.replaceBody(body)
   }
@@ -734,7 +827,6 @@ export class StudyPanelRenderer {
     const start = createSpatialButton({
       label: studyText(language, 'button.begin_assessment'),
       width: 400,
-      disabled: !startPreflightReady,
       onActivate: () => this.actions.startBlock(),
     }).root
     start.name = 'study6-block-start'
@@ -761,6 +853,16 @@ export class StudyPanelRenderer {
         { size: 21, color: STUDY_UI_COLORS.textMuted },
       ),
       paragraph(studyText(language, 'block.instructions'), { size: 22 }),
+      ...(startPreflightReady
+        ? []
+        : [
+            paragraph(
+              language === 'de'
+                ? 'ECG ist nicht bereit. Die Aufzeichnung darf fortgesetzt werden, bleibt aber als nicht ECG-qualifiziert markiert.'
+                : 'ECG is not ready. Recording may continue, but this block remains marked as not ECG-qualified.',
+              { size: 18, color: STUDY_UI_COLORS.warning },
+            ),
+          ]),
       start,
     )
     this.panel.replaceBody(body)

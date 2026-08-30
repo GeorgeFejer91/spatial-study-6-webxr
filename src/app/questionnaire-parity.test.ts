@@ -71,7 +71,7 @@ function render(
   const state = questionnaireState(page)
   mutate?.(state)
   new StudyPanelRenderer(panel, actions()).render(state, {
-    usedParticipantIds: [],
+    participantProgress: [],
     localMessage: '',
     storageHealthy: true,
     polar,
@@ -304,7 +304,53 @@ describe('questionnaire page composition and gating', () => {
     expect(property(named(panel.footer, 'study6-questionnaire-next'), 'width')).toBe(230)
   })
 
-  it('keeps the block start control disabled until the APK preflight is ready', () => {
+  it('keeps all 24 participant boxes selectable and colors only completed segments', () => {
+    const panel = new SpatialStudyPanel()
+    panels.push(panel)
+    const state = questionnaireState('participant_id')
+    new StudyPanelRenderer(panel, actions()).render(state, {
+      participantProgress: [
+        {
+          participantId: 'PH1',
+          completedBlocks: 2,
+          completedDatasets: 0,
+          hasIncompleteDataset: true,
+          completedConditions: ['HC_HE', 'LC_HE'],
+          resumableSessionId: 'session-partial',
+        },
+        {
+          participantId: 'PH2',
+          completedBlocks: 4,
+          completedDatasets: 2,
+          hasIncompleteDataset: false,
+          completedConditions: ['HC_HE', 'LC_HE', 'HC_LE', 'LC_LE'],
+          resumableSessionId: null,
+        },
+      ],
+      localMessage: '',
+      storageHealthy: true,
+    })
+
+    for (let index = 1; index <= 24; index += 1) {
+      expect(property(named(panel.body, `study6-participant-PH${index}`), 'pointerEvents')).toBe(
+        'auto',
+      )
+    }
+    expect(
+      property(named(panel.body, 'study6-participant-PH1-segment-1'), 'backgroundColor'),
+    ).toBe(STUDY_UI_COLORS.success)
+    expect(
+      property(named(panel.body, 'study6-participant-PH1-segment-2'), 'backgroundColor'),
+    ).toBe(STUDY_UI_COLORS.success)
+    expect(
+      property(named(panel.body, 'study6-participant-PH1-segment-3'), 'backgroundColor'),
+    ).toBe(STUDY_UI_COLORS.border)
+    expect(
+      property(named(panel.body, 'study6-participant-PH2-segment-4'), 'backgroundColor'),
+    ).toBe(STUDY_UI_COLORS.success)
+  })
+
+  it('keeps the block start control enabled when APK ECG preflight is not ready', () => {
     const panel = new SpatialStudyPanel()
     panels.push(panel)
     const state = questionnaireState('block_ready')
@@ -324,11 +370,11 @@ describe('questionnaire page composition and gating', () => {
       },
     ]
     new StudyPanelRenderer(panel, actions()).render(state, {
-      usedParticipantIds: [],
+      participantProgress: [],
       localMessage: '',
       storageHealthy: true,
       startPreflightReady: false,
     })
-    expect(property(named(panel.body, 'study6-block-start'), 'pointerEvents')).toBe('none')
+    expect(property(named(panel.body, 'study6-block-start'), 'pointerEvents')).toBe('auto')
   })
 })

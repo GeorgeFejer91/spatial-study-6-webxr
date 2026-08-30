@@ -126,7 +126,7 @@ describe("Study 6 web reducer", () => {
     expect(validateExperimentState(state)).toEqual([])
   })
 
-  it("allocates only on Start participant and rejects used or wrong-pool IDs", () => {
+  it("allocates only on Start participant and never rejects a valid previously used ID", () => {
     let state = createInitialExperimentState()
     state = apply(state, {
       type: "configure",
@@ -139,10 +139,13 @@ describe("Study 6 web reducer", () => {
       allocatedAtUtc: "2026-08-29T20:00:00Z",
       usedParticipantIds: [],
     })
-    expect(result.accepted).toBe(false)
-    if (!result.accepted) expect(result.code).toBe("participant_id_other_variant")
-    expect(result.state.sessionId).toBeNull()
+    expect(result.accepted).toBe(true)
+    if (result.accepted) expect(result.state.participantId).toBe("PI1")
 
+    state = apply(createInitialExperimentState(), {
+      type: "configure",
+      configuration: { variantId: "DHS", languageCode: "en", timingMode: "full" },
+    })
     state = apply(state, { type: "set_participant_id", participantId: "PH1" })
     result = reduceStudy(state, {
       type: "start_participant",
@@ -150,8 +153,7 @@ describe("Study 6 web reducer", () => {
       allocatedAtUtc: "2026-08-29T20:00:00Z",
       usedParticipantIds: ["ph1"],
     })
-    expect(result.accepted).toBe(false)
-    if (!result.accepted) expect(result.code).toBe("participant_id_already_used")
+    expect(result.accepted).toBe(true)
   })
 
   it("guards duration, touched scales, back edges, and immutable questionnaire ownership", () => {
@@ -197,6 +199,38 @@ describe("Study 6 web reducer", () => {
     expect(validateExperimentState(recovered)).toEqual([])
     expect(recovered.page).toBe("stimulus")
     expect(recovered.media).toMatchObject({ status: "paused", positionMs: 4_200 })
+  })
+
+  it("restarts a questionnaire-incomplete block from its beginning", () => {
+    let state = startedState()
+    const originalAttempt = state.blocks[0].attemptId
+    state = apply(state, {
+      type: "start_block",
+      startedAtUtc: "2026-08-29T20:00:00Z",
+    })
+    state = apply(state, {
+      type: "complete_stimulus",
+      observedDurationMs: 10_000,
+      endedAtUtc: "2026-08-29T20:00:10Z",
+    })
+    state = apply(state, { type: "set_sam", dimension: "valence", value: 7 })
+    state = apply(state, {
+      type: "restart_incomplete_block",
+      attemptId: "restart-1-test",
+      restartedAtUtc: "2026-08-29T20:00:11Z",
+      reason: "process_restart",
+    })
+
+    expect(state.page).toBe("block_ready")
+    expect(state.currentBlockIndex).toBe(0)
+    expect(state.blocks[0]).toMatchObject({
+      status: "pending",
+      questionnaire: null,
+      attemptId: "restart-1-test",
+    })
+    expect(state.blocks[0].attemptId).not.toBe(originalAttempt)
+    expect(state.assessmentDraft.samValence).toBeNull()
+    expect(state.media).toMatchObject({ status: "idle", positionMs: 0, durationMs: 0 })
   })
 
   it("makes an operator abort a durable WebXR terminal state", () => {

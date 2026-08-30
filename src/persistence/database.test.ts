@@ -16,23 +16,27 @@ afterEach(async () => {
 })
 
 describe('StudyDatabase', () => {
-  it('atomically reserves a participant and recovers the active revision', async () => {
+  it('allows timestamped repeat data sets for a participant after finalization', async () => {
     const database = await freshDatabase()
     await database.beginSession(
       { participantId: 'PH1', pool: 'PH', permutation: 1, sessionId: 'session-1' },
       { page: 'demographics' },
     )
 
-    await expect(
-      database.beginSession(
-        { participantId: 'PH1', pool: 'PH', permutation: 1, sessionId: 'session-2' },
-        { page: 'demographics' },
-      ),
-    ).rejects.toThrow('already reserved')
-
     const recovered = await database.recoverActiveSession()
     expect(recovered?.revision.revision).toBe(0)
     expect(recovered?.revision.state).toEqual({ page: 'demographics' })
+    await database.finalizeSession('session-1', 'complete')
+    await database.beginSession(
+      { participantId: 'PH1', pool: 'PH', permutation: 1, sessionId: 'session-2' },
+      { sessionId: 'session-2', participantId: 'PH1', page: 'demographics' },
+    )
+    expect(await database.participantIsReserved('PH1')).toBe(true)
+    expect((await database.listParticipants()).map((value) => value.sessionId)).toEqual([
+      'session-1',
+      'session-2',
+    ])
+    expect((await database.recoverActiveSession())?.header.sessionId).toBe('session-2')
     database.close()
   })
 
@@ -105,6 +109,49 @@ describe('StudyDatabase', () => {
     )
 
     expect((await database.recoverActiveSession())?.header.sessionId).toBe('session-2')
+    database.close()
+  })
+
+  it('projects four progress segments and resumes the newest incomplete data set', async () => {
+    const database = await freshDatabase()
+    const blocks = (completed: number) =>
+      ['HC_HE', 'LC_HE', 'HC_LE', 'LC_LE'].map((conditionId, index) => ({
+        conditionId,
+        questionnaire: index < completed ? { complete: true } : null,
+      }))
+    await database.beginSession(
+      { participantId: 'PH1', pool: 'PH', permutation: 1, sessionId: 'session-complete' },
+      {
+        sessionId: 'session-complete',
+        participantId: 'PH1',
+        page: 'complete',
+        blocks: blocks(4),
+      },
+    )
+    await database.finalizeSession('session-complete', 'complete')
+    await database.beginSession(
+      { participantId: 'PH1', pool: 'PH', permutation: 1, sessionId: 'session-partial' },
+      {
+        sessionId: 'session-partial',
+        participantId: 'PH1',
+        page: 'block_ready',
+        blocks: blocks(2),
+      },
+    )
+
+    expect(await database.listParticipantProgress('PH')).toEqual([
+      {
+        participantId: 'PH1',
+        completedBlocks: 2,
+        completedDatasets: 1,
+        hasIncompleteDataset: true,
+        completedConditions: ['HC_HE', 'LC_HE'],
+        resumableSessionId: 'session-partial',
+      },
+    ])
+    expect((await database.recoverParticipantSession('ph1', 'PH'))?.header.sessionId).toBe(
+      'session-partial',
+    )
     database.close()
   })
 

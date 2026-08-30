@@ -123,7 +123,7 @@ const assessmentPages: AssessmentPage[] = [
 
 const render = () => {
   renderer.render(state, {
-    usedParticipantIds: [],
+    participantProgress: [],
     localMessage: 'In-memory questionnaire parity preview | no data',
     storageHealthy: true,
   })
