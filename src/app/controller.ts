@@ -21,6 +21,7 @@ import {
   REMOTE_COMMAND_PROTOCOL,
   type Demographics,
   type ExperimentState,
+  type LanguageCode,
   type RemoteCommand,
   type StudyAction,
   type StudyConfiguration,
@@ -141,6 +142,8 @@ export class StudyController {
   createPanelActions() {
     return {
       configure: (configuration: StudyConfiguration) => void this.enqueue({ type: 'configure', configuration }),
+      setDemographicsLanguage: (languageCode: LanguageCode) =>
+        void this.enqueue({ type: 'set_demographics_language', languageCode }),
       startParticipant: (participantId: string) => void this.startParticipant(participantId),
       submitDemographics: (demographics: Demographics) => void this.enqueue({ type: 'submit_demographics', demographics }),
       startBlock: () => void this.startBlock(),

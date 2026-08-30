@@ -20,7 +20,7 @@ The intended public endpoints are:
 
 - browser and immersive-VR views of the same dark-world, light-panel UI;
 - controller, hand/pinch, mouse, and touch pointer interaction;
-- Quest system text entry for names and manual IDs, plus an in-world age pad;
+- Quest system text entry for names, age, and manual IDs;
 - English and German operator/participant copy;
 - DHS (`PH`) and SHD (`PI`) participant pools, deterministic 24-order
   condition/audio allocation, and local no-reuse selection;
@@ -106,6 +106,24 @@ repository's boundary.
 ```console
 npm run check
 ```
+
+The isolated questionnaire parity surface renders the production UIKit tree
+without opening IndexedDB, media, allocation, or export paths:
+
+```text
+questionnaire-preview.html?page=sam&state=empty&language=en&mode=pointer
+```
+
+`page` is limited to `demographics`, `sam`, `affect`, `emotion`, or `hand`;
+`state` is `empty` or `complete`; `language` is `en` or `de`; and `mode` is
+`pointer` or `direct`. The route is test-only and in-memory. It exists for
+direct native-APK/WebXR surface comparison and is not participant evidence.
+
+Questionnaire geometry, palette, controls, and navigation are regression-bound
+to the pinned native Android panel in `src/ui/questionnaire-contract.ts`.
+Passing host tests does not establish visual parity: final acceptance still
+requires attended empty/completed page comparisons in Quest Browser against
+the exact native APK authority.
 
 On Windows, validate the immutable media manifests and files as well:
 

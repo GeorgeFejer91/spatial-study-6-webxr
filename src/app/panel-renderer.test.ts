@@ -14,7 +14,6 @@ interface RendererDrafts {
     gender: string | null
     consentConfirmed: boolean
   }
-  agePadOpen: boolean
 }
 
 describe('StudyPanelRenderer transient privacy boundary', () => {
@@ -34,7 +33,6 @@ describe('StudyPanelRenderer transient privacy boundary', () => {
       gender: 'other',
       consentConfirmed: true,
     }
-    drafts.agePadOpen = true
 
     renderer.resetTransientState()
 
@@ -48,6 +46,5 @@ describe('StudyPanelRenderer transient privacy boundary', () => {
       gender: null,
       consentConfirmed: false,
     })
-    expect(drafts.agePadOpen).toBe(false)
   })
 })

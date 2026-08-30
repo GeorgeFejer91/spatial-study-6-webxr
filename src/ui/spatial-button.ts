@@ -1,6 +1,7 @@
 import { Container, Text } from '@pmndrs/uikit'
 
 import { STUDY_UI_COLORS } from './constants.ts'
+import { QUESTIONNAIRE_VISUAL_CONTRACT } from './questionnaire-contract.ts'
 
 export type SpatialButtonVariant = 'primary' | 'secondary' | 'danger'
 
@@ -10,6 +11,7 @@ export interface SpatialButtonOptions {
   variant?: SpatialButtonVariant
   width?: number
   height?: number
+  fontSize?: number
   disabled?: boolean
 }
 export interface SpatialButton {
@@ -22,25 +24,28 @@ export interface SpatialButton {
 
 const buttonPalette = {
   primary: {
-    background: STUDY_UI_COLORS.accent,
+    background: STUDY_UI_COLORS.accentSoft,
     hover: STUDY_UI_COLORS.accentHover,
     pressed: STUDY_UI_COLORS.accentPressed,
-    text: '#ffffff',
+    text: STUDY_UI_COLORS.accentDark,
     border: STUDY_UI_COLORS.accent,
+    borderWidth: QUESTIONNAIRE_VISUAL_CONTRACT.button.selectedBorderWidth,
   },
   secondary: {
     background: STUDY_UI_COLORS.panelRaised,
-    hover: '#e9eef5',
-    pressed: '#dce5f0',
+    hover: '#f1f5f9',
+    pressed: '#e2e8f0',
     text: STUDY_UI_COLORS.text,
-    border: '#9ca7b5',
+    border: STUDY_UI_COLORS.border,
+    borderWidth: QUESTIONNAIRE_VISUAL_CONTRACT.button.borderWidth,
   },
   danger: {
-    background: STUDY_UI_COLORS.danger,
-    hover: '#81232a',
-    pressed: '#671b21',
-    text: '#ffffff',
+    background: STUDY_UI_COLORS.warningSoft,
+    hover: '#ffefcf',
+    pressed: '#ffe5b2',
+    text: STUDY_UI_COLORS.warning,
     border: STUDY_UI_COLORS.danger,
+    borderWidth: QUESTIONNAIRE_VISUAL_CONTRACT.button.borderWidth,
   },
 } as const
 
@@ -51,13 +56,13 @@ export function createSpatialButton(options: SpatialButtonOptions): SpatialButto
 
   const root = new Container({
     width: options.width ?? 240,
-    height: options.height ?? 64,
+    height: options.height ?? QUESTIONNAIRE_VISUAL_CONTRACT.button.height,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: palette.background,
     borderColor: palette.border,
-    borderWidth: 2,
-    borderRadius: 14,
+    borderWidth: palette.borderWidth,
+    borderRadius: QUESTIONNAIRE_VISUAL_CONTRACT.button.borderRadius,
     cursor: 'pointer',
     pointerEvents: 'auto',
     hover: { backgroundColor: palette.hover },
@@ -70,8 +75,8 @@ export function createSpatialButton(options: SpatialButtonOptions): SpatialButto
   const label = new Text({
     text: options.label,
     color: palette.text,
-    fontSize: 25,
-    fontWeight: 'semi-bold',
+    fontSize: options.fontSize ?? QUESTIONNAIRE_VISUAL_CONTRACT.button.textSize,
+    fontWeight: 'bold',
     textAlign: 'center',
     pointerEvents: 'none',
   })
@@ -80,13 +85,13 @@ export function createSpatialButton(options: SpatialButtonOptions): SpatialButto
   const setDisabled = (nextDisabled: boolean) => {
     disabled = nextDisabled
     root.setProperties({
-      backgroundColor: disabled ? '#d6d8dc' : palette.background,
-      borderColor: disabled ? '#c2c5ca' : palette.border,
+      backgroundColor: disabled ? '#f1f5f9' : palette.background,
+      borderColor: disabled ? STUDY_UI_COLORS.border : palette.border,
       cursor: disabled ? 'default' : 'pointer',
       opacity: disabled ? 0.72 : 1,
       pointerEvents: disabled ? 'none' : 'auto',
     })
-    label.setProperties({ color: disabled ? '#777d86' : palette.text })
+    label.setProperties({ color: disabled ? STUDY_UI_COLORS.textDisabled : palette.text })
   }
 
   setDisabled(disabled)

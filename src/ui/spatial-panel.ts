@@ -8,8 +8,13 @@ import {
   STUDY_PANEL_PIXEL_SIZE_METERS,
   STUDY_PANEL_WIDTH_PX,
   STUDY_UI_COLORS,
+  type StudyPanelInteractionMode,
   type StudyStatusTone,
 } from './constants.ts'
+import {
+  QUESTIONNAIRE_VISUAL_CONTRACT,
+  questionnaireTitleSize,
+} from './questionnaire-contract.ts'
 import { disposeSystemTextFieldsIn } from './system-text-field.ts'
 
 export interface SpatialStudyPanelOptions {
@@ -19,6 +24,7 @@ export interface SpatialStudyPanelOptions {
   footerHint?: string
   footerStatus?: string
   footerStatusTone?: StudyStatusTone
+  onInteractionModeChange?: (mode: StudyPanelInteractionMode) => void
 }
 
 const statusColors: Record<StudyStatusTone, string> = {
@@ -48,23 +54,29 @@ export class SpatialStudyPanel {
   readonly progress: Text
   readonly footerHint: Text
   readonly footerStatus: Text
+  private interactionMode: StudyPanelInteractionMode = 'pointer'
+  private interactionControlVisible = false
+  private demographicsLayout = false
+  private readonly onInteractionModeChange?: (mode: StudyPanelInteractionMode) => void
 
   constructor(options: SpatialStudyPanelOptions = {}) {
+    const contract = QUESTIONNAIRE_VISUAL_CONTRACT
+    this.onInteractionModeChange = options.onInteractionModeChange
     this.root = new Container({
       width: STUDY_PANEL_WIDTH_PX,
       height: STUDY_PANEL_HEIGHT_PX,
       pixelSize: STUDY_PANEL_PIXEL_SIZE_METERS,
       flexDirection: 'column',
-      paddingTop: 48,
-      paddingRight: 56,
-      paddingBottom: 42,
-      paddingLeft: 56,
-      gapRow: 24,
+      paddingTop: contract.panel.paddingTop,
+      paddingRight: contract.panel.paddingRight,
+      paddingBottom: contract.panel.paddingBottom,
+      paddingLeft: contract.panel.paddingLeft,
+      gapRow: 0,
       overflow: 'hidden',
       backgroundColor: STUDY_UI_COLORS.panel,
-      borderColor: STUDY_UI_COLORS.border,
-      borderWidth: 2,
-      borderRadius: 28,
+      borderColor: STUDY_UI_COLORS.panelBorder,
+      borderWidth: contract.panel.borderWidth,
+      borderRadius: contract.panel.borderRadius,
     })
     this.root.name = 'study6-spatial-panel'
     this.root.position.set(
@@ -75,81 +87,91 @@ export class SpatialStudyPanel {
 
     this.header = new Container({
       width: '100%',
-      height: 98,
+      height: contract.header.height,
       flexDirection: 'row',
       justifyContent: 'space-between',
-      alignItems: 'flex-start',
-      gapColumn: 32,
-      borderBottomWidth: 2,
-      borderColor: STUDY_UI_COLORS.border,
-      paddingBottom: 22,
+      alignItems: 'center',
+      gapColumn: 12,
+      paddingBottom: contract.header.paddingBottom,
     })
 
     const heading = new Container({
       flexGrow: 1,
       flexDirection: 'column',
-      gapRow: 7,
+      justifyContent: 'center',
     })
     this.eyebrow = new Text({
-      text: options.eyebrow ?? 'SPATIAL STUDY 6 | WEBXR',
+      text: '',
       color: STUDY_UI_COLORS.accent,
-      fontSize: 17,
+      fontSize: 0,
       fontWeight: 'bold',
-      letterSpacing: 1.5,
     })
+    const initialTitle = options.title ?? ''
     this.title = new Text({
-      text: options.title ?? '',
+      text: initialTitle,
       color: STUDY_UI_COLORS.text,
-      fontSize: 38,
+      fontSize: questionnaireTitleSize(initialTitle),
       fontWeight: 'bold',
-      lineHeight: '110%',
+      lineHeight: '100%',
     })
-    heading.add(this.eyebrow, this.title)
+    heading.add(this.title)
 
     this.progress = new Text({
-      width: 220,
+      width: contract.header.compactControlWidth,
+      height: contract.header.compactControlHeight,
       text: options.progress ?? '',
-      color: STUDY_UI_COLORS.textMuted,
-      fontSize: 21,
-      fontWeight: 'medium',
-      textAlign: 'right',
-      lineHeight: '120%',
+      color: STUDY_UI_COLORS.text,
+      fontSize: contract.button.textSize,
+      fontWeight: 'bold',
+      textAlign: 'center',
+      lineHeight: '100%',
+      backgroundColor: STUDY_UI_COLORS.panelRaised,
+      borderColor: STUDY_UI_COLORS.border,
+      borderWidth: contract.button.borderWidth,
+      borderRadius: contract.button.borderRadius,
+      cursor: 'pointer',
+      pointerEvents: 'auto',
+      onClick: () => {
+        if (!this.interactionControlVisible) return
+        this.setInteractionMode(this.interactionMode === 'pointer' ? 'direct' : 'pointer')
+      },
     })
+    this.progress.name = 'study6-panel-interaction-mode'
     this.header.add(heading, this.progress)
 
     this.body = new Container({
       width: '100%',
       flexGrow: 1,
       flexDirection: 'column',
-      gapRow: 20,
-      overflow: 'hidden',
+      gapRow: 0,
+      paddingTop: contract.body.paddingTop,
+      paddingBottom: contract.body.paddingBottom,
+      overflow: 'scroll',
     })
     this.body.name = 'study6-spatial-panel-body'
 
     this.footer = new Container({
       width: '100%',
-      height: 70,
+      height: contract.footer.height,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      gapColumn: 24,
-      paddingTop: 18,
-      borderTopWidth: 2,
-      borderColor: STUDY_UI_COLORS.border,
+      gapColumn: 0,
+      paddingTop: contract.footer.paddingTop,
     })
     this.footerHint = new Text({
       flexGrow: 1,
       text: options.footerHint ?? '',
       color: STUDY_UI_COLORS.textMuted,
-      fontSize: 19,
+      fontSize: contract.footer.messageSize,
       lineHeight: '120%',
     })
     this.footerStatus = new Text({
       width: 310,
       text: options.footerStatus ?? '',
       color: statusColors[options.footerStatusTone ?? 'neutral'],
-      fontSize: 19,
-      fontWeight: 'semi-bold',
+      fontSize: contract.footer.messageSize,
+      fontWeight: 'bold',
       textAlign: 'right',
     })
     this.footer.add(this.footerHint, this.footerStatus)
@@ -162,11 +184,69 @@ export class SpatialStudyPanel {
       this.eyebrow.setProperties({ text: options.eyebrow })
     }
     if (options.title !== undefined) {
-      this.title.setProperties({ text: options.title })
+      this.title.setProperties({
+        text: options.title,
+        fontSize: this.demographicsLayout ? 28 : questionnaireTitleSize(options.title),
+      })
     }
     if (options.progress !== undefined) {
-      this.progress.setProperties({ text: options.progress })
+      if (!this.interactionControlVisible) {
+        this.progress.setProperties({ text: options.progress })
+      }
     }
+  }
+
+  setDemographicsLayout(enabled: boolean): void {
+    this.demographicsLayout = enabled
+    const contract = QUESTIONNAIRE_VISUAL_CONTRACT
+    this.root.setProperties({
+      paddingTop: enabled ? 20 : contract.panel.paddingTop,
+      paddingBottom: enabled ? 20 : contract.panel.paddingBottom,
+    })
+    this.header.setProperties({
+      height: enabled ? 54 : contract.header.height,
+      paddingBottom: enabled ? 6 : contract.header.paddingBottom,
+    })
+    this.body.setProperties({
+      paddingTop: enabled ? 4 : contract.body.paddingTop,
+      paddingBottom: enabled ? 0 : contract.body.paddingBottom,
+    })
+    if (enabled) this.title.setProperties({ fontSize: 28 })
+  }
+
+  setInteractionModeControlVisible(visible: boolean): void {
+    this.interactionControlVisible = visible
+    this.progress.setProperties({
+      display: visible ? 'flex' : 'none',
+      pointerEvents: visible ? 'auto' : 'none',
+      cursor: visible ? 'pointer' : 'default',
+    })
+    if (visible) this.projectInteractionMode()
+  }
+
+  setInteractionMode(mode: StudyPanelInteractionMode): void {
+    if (mode === this.interactionMode) return
+    this.interactionMode = mode
+    const pixelSize =
+      mode === 'direct'
+        ? STUDY_PANEL_PIXEL_SIZE_METERS / 6
+        : STUDY_PANEL_PIXEL_SIZE_METERS
+    this.root.setProperties({ pixelSize })
+    this.projectInteractionMode()
+    this.onInteractionModeChange?.(mode)
+  }
+
+  private projectInteractionMode(): void {
+    const direct = this.interactionMode === 'direct'
+    this.progress.setProperties({
+      text: direct ? 'Direct mode' : 'Pointer mode',
+      color: direct ? STUDY_UI_COLORS.accentDark : STUDY_UI_COLORS.text,
+      backgroundColor: direct ? STUDY_UI_COLORS.accentSoft : STUDY_UI_COLORS.panelRaised,
+      borderColor: direct ? STUDY_UI_COLORS.accent : STUDY_UI_COLORS.border,
+      borderWidth: direct
+        ? QUESTIONNAIRE_VISUAL_CONTRACT.button.selectedBorderWidth
+        : QUESTIONNAIRE_VISUAL_CONTRACT.button.borderWidth,
+    })
   }
 
   setFooter(options: {
@@ -174,6 +254,19 @@ export class SpatialStudyPanel {
     status?: string
     tone?: StudyStatusTone
   }): void {
+    this.footer.setProperties({
+      height: QUESTIONNAIRE_VISUAL_CONTRACT.footer.height,
+      paddingTop: QUESTIONNAIRE_VISUAL_CONTRACT.footer.paddingTop,
+    })
+    const defaultChildren = [this.footerHint, this.footerStatus]
+    if (!defaultChildren.every((child) => child.parent === this.footer)) {
+      const previousChildren = [...this.footer.children]
+      this.footer.remove(...previousChildren)
+      previousChildren
+        .filter((child) => !defaultChildren.includes(child as Text))
+        .forEach(disposeObject)
+      this.footer.add(...defaultChildren)
+    }
     if (options.hint !== undefined) {
       this.footerHint.setProperties({ text: options.hint })
     }
@@ -191,6 +284,28 @@ export class SpatialStudyPanel {
     this.body.remove(...previousChildren)
     previousChildren.forEach(disposeObject)
     this.body.add(...children)
+  }
+
+  replaceFooter(...children: Object3D[]): void {
+    this.footer.setProperties({
+      height: QUESTIONNAIRE_VISUAL_CONTRACT.footer.height,
+      paddingTop: QUESTIONNAIRE_VISUAL_CONTRACT.footer.paddingTop,
+    })
+    const previousChildren = [...this.footer.children]
+    this.footer.remove(...previousChildren)
+    previousChildren
+      .filter((child) => child !== this.footerHint && child !== this.footerStatus)
+      .forEach(disposeObject)
+    this.footer.add(...children)
+  }
+
+  hideFooter(): void {
+    const previousChildren = [...this.footer.children]
+    this.footer.remove(...previousChildren)
+    previousChildren
+      .filter((child) => child !== this.footerHint && child !== this.footerStatus)
+      .forEach(disposeObject)
+    this.footer.setProperties({ height: 0, paddingTop: 0 })
   }
 
   setVisible(visible: boolean): void {

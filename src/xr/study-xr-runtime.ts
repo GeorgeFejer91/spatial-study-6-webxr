@@ -17,7 +17,9 @@ import {
   STUDY_PANEL_HEIGHT_METERS,
   STUDY_PANEL_WIDTH_METERS,
   STUDY_UI_COLORS,
+  type StudyPanelInteractionMode,
 } from '../ui/constants.ts'
+import { QUESTIONNAIRE_VISUAL_CONTRACT } from '../ui/questionnaire-contract.ts'
 
 export type XRHandedInputMode = 'none' | 'controller' | 'hand'
 
@@ -62,6 +64,7 @@ export interface StudyXRRuntime {
   enterXR(): Promise<void>
   exitXR(): Promise<void>
   recenterPanel(): void
+  setPanelInteractionMode(mode: StudyPanelInteractionMode): void
   captureMirrorStream(frameRate?: number): MediaStream
   dispose(): void
 }
@@ -115,7 +118,8 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
   let recenterOnNextFrame = false
   let inputSnapshot: XRInputModeSnapshot = { left: 'none', right: 'none' }
 
-  const panelDistance = options.panelDistance ?? STUDY_PANEL_DISTANCE_METERS
+  let panelDistance = options.panelDistance ?? STUDY_PANEL_DISTANCE_METERS
+  let panelVerticalOffset = 0
   const maxPixelRatio = options.maxPixelRatio ?? 2
 
   const resize = () => {
@@ -146,14 +150,13 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
     source.getWorldPosition(scratchHeadPosition)
     source.getWorldQuaternion(scratchHeadQuaternion)
     scratchForward.set(0, 0, -1).applyQuaternion(scratchHeadQuaternion)
-    scratchForward.y = 0
     if (scratchForward.lengthSq() < 0.0001) scratchForward.set(0, 0, -1)
     scratchForward.normalize()
 
     primaryUiRoot.position
       .copy(scratchHeadPosition)
       .addScaledVector(scratchForward, panelDistance)
-    primaryUiRoot.position.y = scratchHeadPosition.y
+    primaryUiRoot.position.y += panelVerticalOffset
     primaryUiRoot.lookAt(scratchHeadPosition.x, scratchHeadPosition.y, scratchHeadPosition.z)
     primaryUiRoot.updateMatrixWorld(true)
   }
@@ -260,6 +263,16 @@ export function createStudyXRRuntime(options: StudyXRRuntimeOptions): StudyXRRun
     enterXR,
     exitXR,
     recenterPanel,
+    setPanelInteractionMode: (mode) => {
+      if (mode === 'direct') {
+        panelDistance = QUESTIONNAIRE_VISUAL_CONTRACT.panel.directDistanceMeters
+        panelVerticalOffset = QUESTIONNAIRE_VISUAL_CONTRACT.panel.directVerticalOffsetMeters
+      } else {
+        panelDistance = QUESTIONNAIRE_VISUAL_CONTRACT.panel.pointerDistanceMeters
+        panelVerticalOffset = 0
+      }
+      recenterPanel()
+    },
     captureMirrorStream: (frameRate = 20) =>
       options.canvas.captureStream(Math.max(1, Math.min(60, frameRate))),
     dispose: () => {

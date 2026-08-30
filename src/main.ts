@@ -9,13 +9,17 @@ import { StudySceneRoot } from './app/scene-root.ts'
 import { StudyMediaPlayer } from './media/player.ts'
 import { createBrowserStudyShell, SpatialStudyPanel } from './ui/index.ts'
 import { createStudyXRRuntime } from './xr/index.ts'
+import type { StudyXRRuntime } from './xr/study-xr-runtime.ts'
 
 const app = document.querySelector<HTMLElement>('#app')
 if (!app) throw new Error('Spatial Study 6 root element is missing.')
 app.replaceChildren()
 
 const shell = createBrowserStudyShell(app)
-const panel = new SpatialStudyPanel()
+let runtime: StudyXRRuntime
+const panel = new SpatialStudyPanel({
+  onInteractionModeChange: (mode) => runtime?.setPanelInteractionMode(mode),
+})
 let controller: StudyController | undefined
 let liveActions: StudyPanelActions | undefined
 
@@ -25,7 +29,7 @@ const media = new StudyMediaPlayer({
   onToggleRequest: (snapshot) => controller?.onMediaToggleRequest(snapshot),
 })
 const sceneRoot = new StudySceneRoot(panel, media)
-const runtime = createStudyXRRuntime({
+runtime = createStudyXRRuntime({
   canvas: shell.canvas,
   onFrame: ({ time }) => controller?.onFrame(time),
   onXRStateChange: (presenting) => controller?.onXRStateChange(presenting),
@@ -39,6 +43,7 @@ runtime.attachUiRoot(sceneRoot, true)
 
 const actionProxy: StudyPanelActions = {
   configure: (value) => liveActions?.configure(value),
+  setDemographicsLanguage: (value) => liveActions?.setDemographicsLanguage(value),
   startParticipant: (value) => liveActions?.startParticipant(value),
   submitDemographics: (value) => liveActions?.submitDemographics(value),
   startBlock: () => liveActions?.startBlock(),

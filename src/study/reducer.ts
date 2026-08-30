@@ -20,6 +20,7 @@ import {
   type AssessmentPage,
   type Demographics,
   type ExperimentState,
+  type LanguageCode,
   type ReductionResult,
   type StudyConfiguration,
 } from "./types"
@@ -34,6 +35,7 @@ const BASE_ELIGIBILITY_BLOCKERS = [
 export type StudyAction =
   | { type: "configure"; configuration: StudyConfiguration }
   | { type: "set_participant_id"; participantId: string }
+  | { type: "set_demographics_language"; languageCode: LanguageCode }
   | {
       type: "start_participant"
       sessionId: string
@@ -174,6 +176,30 @@ export function reduceStudy(
         )
       }
       return accepted({ ...state, participantId: action.participantId })
+    }
+    case "set_demographics_language": {
+      if (
+        state.page !== "demographics" ||
+        !state.configuration ||
+        !state.sessionId ||
+        state.blocks.some((block) => block.status !== "pending")
+      ) {
+        return rejected(
+          state,
+          "demographics_language_locked",
+          "Questionnaire language can only change before the first block.",
+        )
+      }
+      const plans = completeBlockPlan(
+        state.participantId,
+        state.configuration.variantId,
+        action.languageCode,
+      )
+      return accepted({
+        ...state,
+        configuration: { ...state.configuration, languageCode: action.languageCode },
+        blocks: state.blocks.map((block, index) => ({ ...block, ...plans[index] })),
+      })
     }
     case "start_participant": {
       if (state.page !== "participant_id" || state.sessionId !== null) {

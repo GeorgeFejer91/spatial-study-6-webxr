@@ -2,6 +2,7 @@ import { Input } from '@pmndrs/uikit'
 import type { Object3D } from 'three'
 
 import { STUDY_UI_COLORS } from './constants.ts'
+import { QUESTIONNAIRE_VISUAL_CONTRACT } from './questionnaire-contract.ts'
 
 export type SystemKeyboardInputMode =
   | 'text'
@@ -56,19 +57,19 @@ export function createSystemTextField(
 ): SystemTextField {
   const input = new Input({
     width: options.width ?? '100%',
-    height: 66,
-    paddingTop: 16,
-    paddingRight: 20,
-    paddingBottom: 16,
-    paddingLeft: 20,
+    height: QUESTIONNAIRE_VISUAL_CONTRACT.textField.height,
+    paddingTop: 0,
+    paddingRight: QUESTIONNAIRE_VISUAL_CONTRACT.textField.horizontalPadding,
+    paddingBottom: 0,
+    paddingLeft: QUESTIONNAIRE_VISUAL_CONTRACT.textField.horizontalPadding,
     backgroundColor: STUDY_UI_COLORS.panelRaised,
-    borderColor: '#9ca7b5',
-    borderWidth: 2,
-    borderRadius: 12,
+    borderColor: STUDY_UI_COLORS.border,
+    borderWidth: QUESTIONNAIRE_VISUAL_CONTRACT.textField.borderWidth,
+    borderRadius: QUESTIONNAIRE_VISUAL_CONTRACT.textField.borderRadius,
     color: STUDY_UI_COLORS.text,
     caretColor: STUDY_UI_COLORS.accent,
     selectionColor: '#bdd8fa',
-    fontSize: 25,
+    fontSize: QUESTIONNAIRE_VISUAL_CONTRACT.textField.textSize,
     placeholder: options.placeholder ?? '',
     defaultValue: options.initialValue ?? '',
     autocomplete: options.autocomplete ?? 'off',
@@ -78,7 +79,7 @@ export function createSystemTextField(
     onFocusChange: (focused: boolean) => options.onFocusChange?.(focused),
     focus: {
       borderColor: STUDY_UI_COLORS.focus,
-      borderWidth: 3,
+      borderWidth: 2,
     },
   })
 

@@ -1,4 +1,4 @@
-import { Container } from '@pmndrs/uikit'
+import { Container, Text } from '@pmndrs/uikit'
 
 import {
   availableParticipantIds,
@@ -19,13 +19,20 @@ import {
   type VariantId,
 } from '../study/index.ts'
 import {
-  createAgeDigitPad,
   createSpatialButton,
   createSystemTextField,
+  QUESTIONNAIRE_VISUAL_CONTRACT,
   SpatialStudyPanel,
   STUDY_UI_COLORS,
 } from '../ui/index.ts'
-import { buttonRow, choiceButton, paragraph, samRow, spatialScale } from './components.ts'
+import {
+  buttonRow,
+  choiceButton,
+  paragraph,
+  samRow,
+  scaleChoice,
+  spatialScale,
+} from './components.ts'
 
 interface SetupDraft {
   languageCode: LanguageCode
@@ -59,6 +66,7 @@ function freshDemographicsDraft(): DemographicsDraft {
 
 export interface StudyPanelActions {
   configure(configuration: StudyConfiguration): void
+  setDemographicsLanguage(languageCode: LanguageCode): void
   startParticipant(participantId: string): void
   submitDemographics(demographics: Demographics): void
   startBlock(): void
@@ -88,7 +96,6 @@ export class StudyPanelRenderer {
   private setup: SetupDraft = freshSetupDraft()
   private participantDraft = ''
   private demographics: DemographicsDraft = freshDemographicsDraft()
-  private agePadOpen = false
 
   constructor(panel: SpatialStudyPanel, actions: StudyPanelActions) {
     this.panel = panel
@@ -100,12 +107,20 @@ export class StudyPanelRenderer {
     this.setup = freshSetupDraft()
     this.participantDraft = ''
     this.demographics = freshDemographicsDraft()
-    this.agePadOpen = false
   }
 
   render(state: ExperimentState, context: StudyPanelRenderContext): void {
     const language = state.configuration?.languageCode ?? this.setup.languageCode
+    const questionnairePage =
+      state.page === 'self_assessment_manikin' ||
+      state.page === 'affect_vas' ||
+      state.page === 'emotion_representation_vas' ||
+      state.page === 'hand_embodiment'
     this.panel.setVisible(state.page !== 'stimulus')
+    this.panel.setDemographicsLayout(state.page === 'demographics')
+    this.panel.setInteractionModeControlVisible(
+      state.page !== 'operator_setup' && state.page !== 'stimulus',
+    )
     this.panel.setFooter({
       hint: studyText(language, 'app.incubator_notice'),
       status: context.localMessage || (context.storageHealthy ? 'Local storage ready' : 'Storage error'),
@@ -115,7 +130,7 @@ export class StudyPanelRenderer {
     this.panel.setHeader({
       eyebrow: 'SPATIAL STUDY 6 | WEBXR',
       title: studyText(language, `page.${state.page}.title` as Parameters<typeof studyText>[1]),
-      progress: block ? `Block ${block.blockOrder} / 4` : '',
+      progress: questionnairePage ? '' : block ? `Block ${block.blockOrder} / 4` : '',
     })
 
     switch (state.page) {
@@ -271,120 +286,346 @@ export class StudyPanelRenderer {
   }
 
   private renderDemographics(language: LanguageCode): void {
-    if (this.agePadOpen) {
-      const digitPad = createAgeDigitPad({
-        minAge: 0,
-        maxAge: 120,
-        initialValue: this.demographics.ageYears,
-        copy: {
-          emptyValue: '-',
-          clear: language === 'de' ? 'Löschen' : 'Clear',
-          backspace: '<-',
-          confirm: studyText(language, 'button.done'),
-          invalid: (minimum, maximum) => `${minimum}-${maximum}`,
-        },
-        onChange: (age) => {
-          this.demographics.ageYears = age
-        },
-        onConfirm: (age) => {
-          this.demographics.ageYears = age
-          this.agePadOpen = false
-          this.renderDemographics(language)
+    let refreshValidity = () => undefined
+    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 0 })
+    body.name = 'study6-demographics'
+
+    const polarStatus = new Container({
+      width: '100%',
+      height: 70,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gapColumn: 12,
+      paddingTop: 8,
+      paddingRight: 10,
+      paddingBottom: 8,
+      paddingLeft: 10,
+      marginBottom: 6,
+      backgroundColor: STUDY_UI_COLORS.warningSoft,
+      borderColor: STUDY_UI_COLORS.warning,
+      borderWidth: 1,
+      borderRadius: 8,
+    })
+    polarStatus.name = 'study6-demographics-polar-status'
+    polarStatus.add(
+      new Container({
+        width: 18,
+        height: 18,
+        marginRight: 10,
+        backgroundColor: STUDY_UI_COLORS.warning,
+        borderRadius: 9,
+      }),
+      new Text({
+        flexGrow: 1,
+        text:
+          language === 'de'
+            ? 'Polar H10\nIn WebXR nicht verfugbar | keine BLE-Datenerfassung'
+            : 'Polar H10\nUnavailable in WebXR | no BLE data collection',
+        color: STUDY_UI_COLORS.text,
+        fontSize: 14,
+        fontWeight: 'bold',
+        lineHeight: '120%',
+      }),
+      new Container({
+        width: 300,
+        height: 42,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#ffffffb8',
+        borderColor: STUDY_UI_COLORS.warning,
+        borderWidth: 1,
+        borderRadius: 8,
+      }),
+    )
+    const waveform = polarStatus.children[2] as Container
+    waveform.add(
+      new Text({
+        text: 'NO BLE',
+        color: STUDY_UI_COLORS.textMuted,
+        fontSize: 12,
+        fontWeight: 'bold',
+      }),
+    )
+    body.add(polarStatus)
+
+    const title = new Container({
+      width: '100%',
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      paddingBottom: 6,
+    })
+    title.add(
+      new Text({
+        width: '45%',
+        text: studyText(language, 'page.demographics.title'),
+        color: STUDY_UI_COLORS.text,
+        fontSize: 17,
+        fontWeight: 'bold',
+      }),
+      new Text({
+        width: '55%',
+        text: studyText(language, 'page.demographics.subtitle'),
+        color: STUDY_UI_COLORS.textMuted,
+        fontSize: 13,
+        textAlign: 'right',
+      }),
+    )
+    body.add(title)
+
+    const columns = new Container({
+      width: '100%',
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gapColumn: 18,
+    })
+    const left = new Container({ width: 528, flexDirection: 'column' })
+    const right = new Container({ width: 478, flexDirection: 'column' })
+
+    const labeledField = (options: {
+      label: string
+      value: string
+      width: number
+      inputMode?: 'text' | 'tel'
+      maxLength: number
+      changed: (value: string) => void
+    }) => {
+      const group = new Container({ width: options.width, flexDirection: 'column' })
+      const label = paragraph(options.label, { size: 16, width: options.width })
+      label.setProperties({ fontWeight: 'bold', paddingBottom: 4 })
+      const field = createSystemTextField({
+        ariaLabel: options.label,
+        initialValue: options.value,
+        width: options.width,
+        inputMode: options.inputMode,
+        maxLength: options.maxLength,
+        onValueChange: (value) => {
+          options.changed(value)
+          refreshValidity()
         },
       })
-      this.panel.replaceBody(digitPad.root)
-      return
+      group.add(label, field.root)
+      return group
     }
 
-    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 13 })
-    const nameRow = new Container({ width: '100%', flexDirection: 'row', gapColumn: 14 })
-    const firstName = createSystemTextField({
-      ariaLabel: studyText(language, 'demographics.first_name'),
-      placeholder: studyText(language, 'demographics.first_name'),
-      initialValue: this.demographics.firstName,
-      width: 470,
-      maxLength: 80,
-      onValueChange: (value) => {
-        this.demographics.firstName = value
-      },
+    const names = new Container({
+      width: '100%',
+      flexDirection: 'row',
+      gapColumn: 8,
+      paddingBottom: 8,
     })
-    const lastName = createSystemTextField({
-      ariaLabel: studyText(language, 'demographics.last_name'),
-      placeholder: studyText(language, 'demographics.last_name'),
-      initialValue: this.demographics.lastName,
-      width: 470,
-      maxLength: 80,
-      onValueChange: (value) => {
-        this.demographics.lastName = value
-      },
-    })
-    nameRow.add(firstName.root, lastName.root)
-    body.add(nameRow)
-    body.add(
-      createSpatialButton({
-        label: `${studyText(language, 'demographics.age')}: ${this.demographics.ageYears ?? '-'}`,
-        variant: 'secondary',
-        width: 300,
-        onActivate: () => {
-          this.agePadOpen = true
+    names.add(
+      labeledField({
+        label: studyText(language, 'demographics.first_name'),
+        value: this.demographics.firstName,
+        width: 260,
+        maxLength: 80,
+        changed: (value) => {
+          this.demographics.firstName = value
+        },
+      }),
+      labeledField({
+        label: studyText(language, 'demographics.last_name'),
+        value: this.demographics.lastName,
+        width: 260,
+        maxLength: 80,
+        changed: (value) => {
+          this.demographics.lastName = value
+        },
+      }),
+    )
+    left.add(names)
+    left.add(
+      labeledField({
+        label: studyText(language, 'demographics.age'),
+        value: this.demographics.ageYears?.toString() ?? '',
+        width: 248,
+        inputMode: 'tel',
+        maxLength: 3,
+        changed: (value) => {
+          const digits = value.replace(/\D/g, '').slice(0, 3)
+          this.demographics.ageYears = digits ? Number(digits) : undefined
+        },
+      }),
+    )
+
+    const compactChoices = <T extends string>(options: {
+      label: string
+      values: readonly T[]
+      selected: T | null
+      text: (value: T) => string
+      changed: (value: T) => void
+      width: number
+    }) => {
+      const group = new Container({ width: options.width, flexDirection: 'column' })
+      const label = paragraph(options.label, { size: 14, width: options.width })
+      label.setProperties({ fontWeight: 'bold', paddingTop: 6, paddingBottom: 4 })
+      const row = new Container({
+        width: options.width,
+        height: QUESTIONNAIRE_VISUAL_CONTRACT.button.compactHeight,
+        flexDirection: 'row',
+        gapColumn: 6,
+      })
+      const controlWidth = (options.width - 6 * (options.values.length - 1)) / options.values.length
+      options.values.forEach((value) =>
+        row.add(
+          choiceButton({
+            label: options.text(value),
+            selected: options.selected === value,
+            width: controlWidth,
+            height: QUESTIONNAIRE_VISUAL_CONTRACT.button.compactHeight,
+            fontSize: 12,
+            onActivate: () => options.changed(value),
+          }),
+        ),
+      )
+      group.add(label, row)
+      return group
+    }
+
+    left.add(
+      compactChoices({
+        label: studyText(language, 'demographics.handedness'),
+        values: ['right', 'left', 'ambidextrous', 'prefer_not_to_say'] as const,
+        selected: this.demographics.handedness,
+        text: (value) => studyText(language, `handedness.${value}`),
+        width: 528,
+        changed: (value) => {
+          this.demographics.handedness = value
           this.renderDemographics(language)
         },
-      }).root,
-    )
-    body.add(
-      buttonRow(
-        ...(['right', 'left', 'ambidextrous', 'prefer_not_to_say'] as const).map((value) =>
-          choiceButton({
-            label: studyText(language, `handedness.${value}`),
-            selected: this.demographics.handedness === value,
-            width: 220,
-            onActivate: () => {
-              this.demographics.handedness = value
-              this.renderDemographics(language)
-            },
-          }),
-        ),
-      ),
-    )
-    body.add(
-      buttonRow(
-        ...(['male', 'female', 'other', 'prefer_not_to_say'] as const).map((value) =>
-          choiceButton({
-            label: studyText(language, `gender.${value}`),
-            selected: this.demographics.gender === value,
-            width: 220,
-            onActivate: () => {
-              this.demographics.gender = value
-              this.renderDemographics(language)
-            },
-          }),
-        ),
-      ),
-    )
-    body.add(
-      choiceButton({
-        label: studyText(language, 'consent.text'),
-        selected: this.demographics.consentConfirmed,
-        width: 760,
-        onActivate: () => {
-          this.demographics.consentConfirmed = !this.demographics.consentConfirmed
+      }),
+      compactChoices({
+        label: studyText(language, 'demographics.gender'),
+        values: ['male', 'female', 'other', 'prefer_not_to_say'] as const,
+        selected: this.demographics.gender,
+        text: (value) => studyText(language, `gender.${value}`),
+        width: 528,
+        changed: (value) => {
+          this.demographics.gender = value
           this.renderDemographics(language)
         },
       }),
     )
-    const candidate = this.demographicsValue()
-    body.add(
-      createSpatialButton({
-        label: studyText(language, 'button.begin'),
-        width: 320,
-        disabled: candidate === null || validateDemographics(candidate).length > 0,
-        onActivate: () => {
-          const value = this.demographicsValue()
-          if (value) this.actions.submitDemographics(value)
-        },
-      }).root,
+
+    right.add(
+      compactChoices({
+        label: studyText(language, 'demographics.language'),
+        values: ['en', 'de'] as const,
+        selected: language,
+        text: (value) => (value === 'en' ? 'English' : 'Deutsch'),
+        width: 478,
+        changed: (value) => this.actions.setDemographicsLanguage(value),
+      }),
     )
+
+    const consent = new Container({
+      width: 478,
+      height: QUESTIONNAIRE_VISUAL_CONTRACT.button.height,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gapColumn: 10,
+      paddingLeft: 10,
+      paddingRight: 10,
+      marginTop: 4,
+      backgroundColor: STUDY_UI_COLORS.panelRaised,
+      borderColor: STUDY_UI_COLORS.border,
+      borderWidth: 1,
+      borderRadius: 8,
+      cursor: 'pointer',
+      pointerEvents: 'auto',
+      onClick: () => {
+        this.demographics.consentConfirmed = !this.demographics.consentConfirmed
+        this.renderDemographics(language)
+      },
+    })
+    consent.name = 'study6-demographics-consent'
+    const checkbox = new Container({
+      width: 24,
+      height: 24,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: this.demographics.consentConfirmed
+        ? STUDY_UI_COLORS.accent
+        : STUDY_UI_COLORS.panelRaised,
+      borderColor: this.demographics.consentConfirmed
+        ? STUDY_UI_COLORS.accent
+        : STUDY_UI_COLORS.textMuted,
+      borderWidth: 2,
+      borderRadius: 3,
+      pointerEvents: 'none',
+    })
+    checkbox.add(
+      new Text({
+        text: this.demographics.consentConfirmed ? 'X' : '',
+        color: '#ffffff',
+        fontSize: 16,
+        fontWeight: 'bold',
+        pointerEvents: 'none',
+      }),
+    )
+    consent.add(
+      checkbox,
+      new Text({
+        flexGrow: 1,
+        text: studyText(language, 'consent.text'),
+        color: STUDY_UI_COLORS.text,
+        fontSize: 17,
+        pointerEvents: 'none',
+      }),
+    )
+    right.add(consent)
+
+    const demographicsFooter = new Container({
+      width: 478,
+      height: 64,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingTop: 8,
+    })
+    const back = createSpatialButton({
+      label: studyText(language, 'button.back'),
+      variant: 'secondary',
+      width: 78,
+      disabled: true,
+      onActivate: () => undefined,
+    })
+    const validation = new Text({
+      flexGrow: 1,
+      height: QUESTIONNAIRE_VISUAL_CONTRACT.button.height,
+      paddingLeft: 10,
+      paddingRight: 10,
+      text: '',
+      color: STUDY_UI_COLORS.warning,
+      fontSize: 13,
+      fontWeight: 'bold',
+    })
+    const begin = createSpatialButton({
+      label: studyText(language, 'button.begin'),
+      width: 190,
+      onActivate: () => {
+        const value = this.demographicsValue()
+        if (value && validateDemographics(value).length === 0) {
+          this.actions.submitDemographics(value)
+        }
+      },
+    })
+    demographicsFooter.add(back.root, validation, begin.root)
+    right.add(demographicsFooter)
+
+    refreshValidity = () => {
+      const candidate = this.demographicsValue()
+      const invalid = candidate === null || validateDemographics(candidate).length > 0
+      begin.setDisabled(invalid)
+      validation.setProperties({
+        text: invalid ? studyText(language, 'validation.demographics') : '',
+      })
+    }
+    refreshValidity()
+
+    columns.add(left, right)
+    body.add(columns)
     this.panel.replaceBody(body)
+    this.panel.hideFooter()
   }
 
   private demographicsValue(): Demographics | null {
@@ -441,45 +682,97 @@ export class StudyPanelRenderer {
     this.panel.replaceBody(body)
   }
 
+  private renderQuestionnaireFooter(options: {
+    language: LanguageCode
+    back: boolean
+    complete: boolean
+    warning: string
+    readyMessage?: string
+    nextLabel: string
+  }): void {
+    const contract = QUESTIONNAIRE_VISUAL_CONTRACT
+    const children: Array<Container | Text> = []
+    if (options.back) {
+      const back = createSpatialButton({
+        label: studyText(options.language, 'button.back'),
+        variant: 'secondary',
+        width: contract.footer.backWidth,
+        onActivate: () => this.actions.backAssessment(),
+      }).root
+      back.name = 'study6-questionnaire-back'
+      children.push(back)
+    }
+    const message = new Text({
+      flexGrow: 1,
+      height: contract.button.height,
+      paddingLeft: contract.footer.messagePadding,
+      paddingRight: contract.footer.messagePadding,
+      text: options.complete ? options.readyMessage ?? '' : options.warning,
+      color: options.complete ? STUDY_UI_COLORS.textMuted : STUDY_UI_COLORS.warning,
+      fontSize: contract.footer.messageSize,
+      fontWeight: options.complete ? 'normal' : 'bold',
+    })
+    message.name = 'study6-questionnaire-validation'
+    const next = createSpatialButton({
+      label: options.nextLabel,
+      width: contract.footer.nextWidth,
+      disabled: !options.complete,
+      onActivate: () => this.actions.advanceAssessment(),
+    }).root
+    next.name = 'study6-questionnaire-next'
+    children.push(message, next)
+    this.panel.replaceFooter(...children)
+  }
+
   private renderSam(state: ExperimentState, language: LanguageCode): void {
     const draft = state.assessmentDraft
-    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 7 })
+    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 0 })
+    body.name = 'study6-questionnaire-sam'
     body.add(
       samRow({
-        label: `${studyText(language, 'sam.valence.low')} <-> ${studyText(language, 'sam.valence.high')}`,
+        question: '',
+        lowLabel: studyText(language, 'sam.valence.low'),
+        highLabel: studyText(language, 'sam.valence.high'),
         dimension: 'valence',
         selected: draft.samValence,
         onSelect: (value) => this.actions.setSam('valence', value),
       }),
       samRow({
-        label: studyText(language, 'sam.arousal.question'),
+        question: studyText(language, 'sam.arousal.question'),
+        lowLabel: studyText(language, 'sam.arousal.low'),
+        highLabel: studyText(language, 'sam.arousal.high'),
         dimension: 'arousal',
         selected: draft.samArousal,
         onSelect: (value) => this.actions.setSam('arousal', value),
       }),
       samRow({
-        label: studyText(language, 'sam.dominance.question'),
+        question: studyText(language, 'sam.dominance.question'),
+        lowLabel: studyText(language, 'sam.dominance.low'),
+        highLabel: studyText(language, 'sam.dominance.high'),
         dimension: 'dominance',
         selected: draft.samDominance,
         onSelect: (value) => this.actions.setSam('dominance', value),
       }),
     )
-    const controls = buttonRow(
-      createSpatialButton({
-        label: studyText(language, 'button.continue'),
-        width: 280,
-        disabled: draft.samValence === null || draft.samArousal === null || draft.samDominance === null,
-        onActivate: () => this.actions.advanceAssessment(),
-      }).root,
-    )
-    body.add(controls)
     this.panel.replaceBody(body)
+    this.renderQuestionnaireFooter({
+      language,
+      back: false,
+      complete:
+        draft.samValence !== null &&
+        draft.samArousal !== null &&
+        draft.samDominance !== null,
+      warning: studyText(language, 'validation.sam'),
+      readyMessage: studyText(language, 'sam.instruction.footer'),
+      nextLabel: studyText(language, 'button.continue'),
+    })
   }
 
   private renderAffect(state: ExperimentState, language: LanguageCode): void {
     const draft = state.assessmentDraft
-    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 14, alignItems: 'center' })
-    body.add(paragraph(studyText(language, 'affect.instruction'), { size: 18 }))
+    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 0, alignItems: 'center' })
+    body.name = 'study6-questionnaire-affect'
+    body.add(paragraph(studyText(language, 'affect.instruction'), { size: 16 }))
     body.add(
       spatialScale({
         question: studyText(language, 'affect.valence.question'),
@@ -489,6 +782,9 @@ export class StudyPanelRenderer {
         touched: draft.affectValenceTouched,
         lowLabel: studyText(language, 'scale.unpleasant'),
         highLabel: studyText(language, 'scale.pleasant'),
+        neutralLabel: studyText(language, 'scale.neutral'),
+        signed: true,
+        name: 'study6-affect-valence',
         onChange: (value) => this.actions.setAffect('valence', value),
       }),
       spatialScale({
@@ -499,36 +795,33 @@ export class StudyPanelRenderer {
         touched: draft.affectArousalTouched,
         lowLabel: studyText(language, 'scale.low_energy'),
         highLabel: studyText(language, 'scale.high_energy'),
+        neutralLabel: studyText(language, 'scale.neutral'),
+        signed: true,
+        name: 'study6-affect-arousal',
         onChange: (value) => this.actions.setAffect('arousal', value),
       }),
     )
-    body.add(
-      buttonRow(
-        createSpatialButton({
-          label: studyText(language, 'button.back'),
-          variant: 'secondary',
-          width: 220,
-          onActivate: () => this.actions.backAssessment(),
-        }).root,
-        createSpatialButton({
-          label: studyText(language, 'button.continue'),
-          width: 260,
-          disabled: !draft.affectValenceTouched || !draft.affectArousalTouched,
-          onActivate: () => this.actions.advanceAssessment(),
-        }).root,
-      ),
-    )
     this.panel.replaceBody(body)
+    this.renderQuestionnaireFooter({
+      language,
+      back: true,
+      complete: draft.affectValenceTouched && draft.affectArousalTouched,
+      warning: studyText(language, 'validation.affect'),
+      nextLabel: studyText(language, 'button.continue'),
+    })
   }
 
   private renderEmotions(state: ExperimentState, language: LanguageCode): void {
     const draft = state.assessmentDraft
     const emotions = ['anger', 'disgust', 'fear', 'happiness', 'sadness', 'surprise'] as const
-    const columns = new Container({ width: '100%', flexDirection: 'row', gapColumn: 22 })
-    for (let columnIndex = 0; columnIndex < 2; columnIndex += 1) {
-      const column = new Container({ width: 470, flexDirection: 'column', gapRow: 10 })
-      for (const emotion of emotions.slice(columnIndex * 3, columnIndex * 3 + 3)) {
-        column.add(
+    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 2 })
+    body.name = 'study6-questionnaire-emotions'
+    body.add(paragraph(studyText(language, 'emotion.instruction'), { size: 16 }))
+    for (let rowIndex = 0; rowIndex < 2; rowIndex += 1) {
+      const row = new Container({ width: '100%', flexDirection: 'row', gapColumn: 20 })
+      row.name = `study6-emotion-row-${rowIndex + 1}`
+      for (const emotion of emotions.slice(rowIndex * 3, rowIndex * 3 + 3)) {
+        row.add(
           spatialScale({
             question: studyText(language, `emotion.${emotion}`),
             minimum: 0,
@@ -537,79 +830,60 @@ export class StudyPanelRenderer {
             touched: draft[`${emotion}Touched`],
             lowLabel: studyText(language, 'emotion.not_represented'),
             highLabel: studyText(language, 'emotion.clearly_represented'),
-            width: 450,
-            compact: true,
+            width: 328,
+            showFill: true,
+            name: `study6-emotion-${emotion}`,
             onChange: (value) => this.actions.setEmotion(emotion, value),
           }),
         )
       }
-      columns.add(column)
+      body.add(row)
     }
     const complete = emotions.every((emotion) => draft[`${emotion}Touched`])
-    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 14 })
-    body.add(columns)
-    body.add(
-      buttonRow(
-        createSpatialButton({
-          label: studyText(language, 'button.back'),
-          variant: 'secondary',
-          width: 220,
-          onActivate: () => this.actions.backAssessment(),
-        }).root,
-        createSpatialButton({
-          label: studyText(language, 'button.continue'),
-          width: 260,
-          disabled: !complete,
-          onActivate: () => this.actions.advanceAssessment(),
-        }).root,
-      ),
-    )
     this.panel.replaceBody(body)
+    this.renderQuestionnaireFooter({
+      language,
+      back: true,
+      complete,
+      warning: studyText(language, 'validation.emotions'),
+      nextLabel: studyText(language, 'button.continue'),
+    })
   }
 
   private renderHand(state: ExperimentState, language: LanguageCode): void {
     const draft = state.assessmentDraft
-    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 20, alignItems: 'center' })
-    body.add(paragraph(studyText(language, 'hand.instruction'), { size: 19 }))
+    const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 0 })
+    body.name = 'study6-questionnaire-hand'
+    body.add(paragraph(studyText(language, 'hand.instruction'), { size: 16 }))
     body.add(
-      spatialScale({
+      scaleChoice({
         question: studyText(language, 'hand.ownership'),
-        minimum: 1,
-        maximum: 7,
-        value: draft.handOwnership ?? 4,
-        touched: draft.handOwnership !== null,
         lowLabel: studyText(language, 'scale.strongly_disagree'),
         highLabel: studyText(language, 'scale.strongly_agree'),
-        onChange: (value) => this.actions.setHand('ownership', value),
+        selected: draft.handOwnership,
+        name: 'study6-hand-ownership',
+        onSelect: (value) => this.actions.setHand('ownership', value),
       }),
-      spatialScale({
+      scaleChoice({
         question: studyText(language, 'hand.agency'),
-        minimum: 1,
-        maximum: 7,
-        value: draft.handAgency ?? 4,
-        touched: draft.handAgency !== null,
         lowLabel: studyText(language, 'scale.strongly_disagree'),
         highLabel: studyText(language, 'scale.strongly_agree'),
-        onChange: (value) => this.actions.setHand('agency', value),
+        selected: draft.handAgency,
+        name: 'study6-hand-agency',
+        onSelect: (value) => this.actions.setHand('agency', value),
       }),
-    )
-    body.add(
-      buttonRow(
-        createSpatialButton({
-          label: studyText(language, 'button.back'),
-          variant: 'secondary',
-          width: 220,
-          onActivate: () => this.actions.backAssessment(),
-        }).root,
-        createSpatialButton({
-          label: state.currentBlockIndex === 3 ? studyText(language, 'button.finish') : studyText(language, 'button.next_block'),
-          width: 300,
-          disabled: draft.handOwnership === null || draft.handAgency === null,
-          onActivate: () => this.actions.advanceAssessment(),
-        }).root,
-      ),
     )
     this.panel.replaceBody(body)
+    this.renderQuestionnaireFooter({
+      language,
+      back: true,
+      complete: draft.handOwnership !== null && draft.handAgency !== null,
+      warning: studyText(language, 'validation.hand'),
+      nextLabel:
+        state.currentBlockIndex === 3
+          ? studyText(language, 'button.finish')
+          : studyText(language, 'button.next_block'),
+    })
   }
 
   private renderComplete(language: LanguageCode): void {

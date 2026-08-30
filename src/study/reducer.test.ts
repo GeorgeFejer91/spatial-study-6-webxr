@@ -68,6 +68,31 @@ function answerCurrentAssessment(state: ExperimentState, blockIndex: number): Ex
 }
 
 describe("Study 6 web reducer", () => {
+  it("changes questionnaire language on demographics and rebinds only pending audio", () => {
+    let state = createInitialExperimentState()
+    state = apply(state, {
+      type: "configure",
+      configuration: { variantId: "DHS", languageCode: "de", timingMode: "clipped" },
+    })
+    state = apply(state, { type: "set_participant_id", participantId: "PH1" })
+    state = apply(state, {
+      type: "start_participant",
+      sessionId: "LANGUAGE_TEST",
+      allocatedAtUtc: "2026-08-29T20:00:00Z",
+      usedParticipantIds: [],
+    })
+    const blockIds = state.blocks.map((block) => block.blockId)
+    const conditions = state.blocks.map((block) => block.conditionId)
+    expect(state.blocks.every((block) => block.audioFile.includes("_DE"))).toBe(true)
+
+    state = apply(state, { type: "set_demographics_language", languageCode: "en" })
+
+    expect(state.configuration?.languageCode).toBe("en")
+    expect(state.blocks.map((block) => block.blockId)).toEqual(blockIds)
+    expect(state.blocks.map((block) => block.conditionId)).toEqual(conditions)
+    expect(state.blocks.every((block) => block.audioFile.includes("_EN"))).toBe(true)
+  })
+
   it("runs four unique blocks through the complete questionnaire without eligibility promotion", () => {
     let state = startedState()
     expect(state.page).toBe("block_ready")
