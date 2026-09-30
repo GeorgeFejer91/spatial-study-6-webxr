@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+vi.mock('./panel-text', () => ({ fitPanelButtons: () => () => {} }))
 
 import {
   createPairingDescriptor,
@@ -228,6 +229,20 @@ afterEach(async () => {
 })
 
 describe('companion trusted-link bootstrap', () => {
+  it('keeps a recorder panel offline until Connect, then stops discovery on disconnect', async () => {
+    history.replaceState(null, '', '/spatial-study-6-webxr/operator.html')
+    await import('./main.ts')
+    await flushMicrotasks()
+    expect(beaconHarness.startCalls).toBe(0)
+    expect(viewerHarness.connectDescriptors).toHaveLength(0)
+    document.querySelector<HTMLButtonElement>('#connect')!.click()
+    await flushMicrotasks()
+    expect(beaconHarness.startCalls).toBe(1)
+    document.querySelector<HTMLButtonElement>('#disconnect')!.click()
+    await flushMicrotasks()
+    expect(beaconHarness.stopCalls).toBe(1)
+    expect(document.querySelector<HTMLButtonElement>('#connect')!.disabled).toBe(false)
+  })
   it('scrubs, saves, and auto-connects a valid fragment without printing its secret', async () => {
     const descriptor = createPairingDescriptor(false, undefined, false)
     const invitation = encodePairingDescriptor(descriptor)

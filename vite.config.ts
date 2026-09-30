@@ -8,6 +8,7 @@ export default defineConfig({
       input: {
         experiment: resolve(import.meta.dirname, 'index.html'),
         companion: resolve(import.meta.dirname, 'companion.html'),
+        operator: resolve(import.meta.dirname, 'operator.html'),
         questionnairePreview: resolve(import.meta.dirname, 'questionnaire-preview.html'),
       },
     },

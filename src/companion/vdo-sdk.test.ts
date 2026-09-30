@@ -2,9 +2,32 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 describe('VDO.Ninja SDK loading boundary', () => {
   afterEach(() => {
+    vi.unstubAllGlobals()
     delete window.VDONinjaSDK
     document.querySelectorAll('[data-study6-vdo-sdk]').forEach((element) => element.remove())
     vi.resetModules()
+  })
+
+  it('preserves signaling credentials while disabling SDK caches when panel storage is denied', async () => {
+    const { createVdoSdk } = await import('./vdo-sdk')
+    const options = vi.fn()
+    class Sdk extends EventTarget {
+      constructor(value?: Record<string, unknown>) { super(); options(value) }
+      _getStorage = () => { throw new Error('Storage denied') }
+      _setStorage = () => { throw new Error('Storage denied') }
+      async connect() {}
+      async joinRoom() {}
+      async announce() { return '' }
+      async publish() { return '' }
+      async view() { return null }
+      sendData() { return true }
+      async disconnect() {}
+    }
+    vi.stubGlobal('localStorage', undefined)
+    const sdk = createVdoSdk(Sdk, true, 'fixture-key')
+    expect(options).toHaveBeenCalledWith({ password: 's6-vdo-v1-fixture-key', salt: 'spatial-study-6-webxr-v1', forceTURN: true, autoPingViewer: true })
+    expect(sdk._getStorage?.()).toBeNull()
+    expect(() => sdk._setStorage?.()).not.toThrow()
   })
 
   it('does not create a signaling client or SDK script merely by importing the adapter', async () => {
