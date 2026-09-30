@@ -1,4 +1,5 @@
 import './style.css'
+import { fitPanelButtons } from './panel-text'
 
 import {
   decodePairingDescriptor,
@@ -26,7 +27,8 @@ import {
   type Study6PublicBeaconTarget,
 } from './public-beacon.ts'
 
-if (window.top !== window.self) {
+const panelMode = location.pathname.endsWith('/operator.html')
+if (window.top !== window.self && !panelMode) {
   document.body.replaceChildren('This operator companion must be opened as a top-level page.')
   throw new Error('The companion page cannot run inside a frame.')
 }
@@ -125,6 +127,10 @@ function fragmentFromInput(value: string): string {
 type PairingSource = 'link' | 'manual' | 'saved' | 'public'
 
 function acceptDescriptor(nextDescriptor: PairingDescriptor, source: PairingSource): boolean {
+  if (panelMode && nextDescriptor.spectatorMedia) {
+    connectionState.textContent = 'Recorder panels support data-only pairing. Use a data-only invitation or open the companion separately for spectator media.'
+    return false
+  }
   descriptor = nextDescriptor
   descriptorSource = source
   pairInput.value = ''
@@ -136,7 +142,9 @@ function acceptDescriptor(nextDescriptor: PairingDescriptor, source: PairingSour
     ? `Public target ${selectedPublicHint?.slice(0, 8).toUpperCase() ?? 'UNKNOWN'} is selected. This open prototype derives its data-only BRSP session from the public beacon and requests the existing bounded Study 6 operator scopes automatically.`
     : `BRSP pairing session ${nextDescriptor.streamId.slice(-8).toUpperCase()} is ready${nextDescriptor.forceTurn ? ' with TURN requested' : ''}. ${nextDescriptor.spectatorMedia ? 'Optional spectator monitoring is enabled.' : 'This is a data-only session.'} Full requested Study 6 operator scopes still require mutual proof and the headset grant. ${persisted ? 'This browser will remember the pairing until you select Forget pairing.' : 'Local storage is unavailable, so this pairing lasts only for the current page.'}`
   monitoringSection.hidden = !nextDescriptor.spectatorMedia
-  connectionState.textContent = source === 'public'
+  connectionState.textContent = panelMode && source === 'link'
+    ? 'Pairing accepted. Select Connect to join this session.'
+    : source === 'public'
     ? 'Public headset selected. Connecting automatically; select Cancel / disconnect to stop for this page.'
     : source === 'manual'
       ? 'Pairing accepted. Connecting automatically; select Cancel / disconnect to stop.'
@@ -288,7 +296,7 @@ function renderConnection(snapshot: CompanionViewerSnapshot): void {
   connectionState.textContent = snapshot.message || (snapshot.phase === 'idle' ? 'Disconnected.' : snapshot.phase)
   const connected = snapshot.peerConnected
   renderCommandAvailability()
-  connectButton.disabled = snapshot.phase === 'connecting' || descriptor === null
+  connectButton.disabled = snapshot.phase === 'connecting' || (descriptor === null && !panelMode)
   connectButton.textContent = snapshot.phase === 'error' ? 'Retry now' : 'Connect'
   disconnectButton.disabled = snapshot.phase === 'idle' && retryTimer === undefined
   routeBadge.textContent = connected
@@ -480,6 +488,7 @@ async function disconnect(): Promise<void> {
   connectInFlightGeneration = null
   publicSelectionGeneration += 1
   publicAutoConnectSuppressed = true
+  if (panelMode) await publicBeaconReceiver.stop()
   stopAutomaticReconnect()
   await stopCurrentViewer()
   connectionState.textContent = selectedPublicHint
@@ -487,7 +496,7 @@ async function disconnect(): Promise<void> {
     : descriptor
       ? 'Disconnected. Select Connect to authenticate again.'
     : 'Not paired.'
-  connectButton.disabled = descriptor === null
+  connectButton.disabled = descriptor === null && !panelMode
   connectButton.textContent = 'Connect'
   renderPublicDiscovery()
 }
@@ -516,7 +525,7 @@ async function forgetPairing(): Promise<void> {
   descriptor = null
   descriptorSource = null
   pairInput.value = ''
-  connectButton.disabled = true
+  connectButton.disabled = !panelMode
   await stopCurrentViewer()
   monitoringSection.hidden = true
   pairingSummary.textContent = 'Pairing forgotten. Open or paste a fresh headset link to pair again.'
@@ -528,7 +537,10 @@ applyPairButton.addEventListener('click', () => void applyInputPairing())
 pairInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') void applyInputPairing()
 })
-connectButton.addEventListener('click', () => void connect())
+connectButton.addEventListener('click', () => {
+  if (descriptor) void connect()
+  else void startPublicDiscovery()
+})
 disconnectButton.addEventListener('click', () => void disconnect())
 forgetPairingButton.addEventListener('click', () => void forgetPairing())
 
@@ -596,9 +608,9 @@ participantInput.addEventListener('keydown', (event) => {
 })
 
 if (launchPairingFragment) {
-  if (applyDescriptor(launchPairingFragment, 'link')) void connect()
+  if (applyDescriptor(launchPairingFragment, 'link') && !panelMode) void connect()
 } else {
-  const restoredDescriptor = loadTrustedPairing()
+  const restoredDescriptor = panelMode ? null : loadTrustedPairing()
   if (restoredDescriptor) {
     forgetPairingButton.disabled = false
     acceptDescriptor(restoredDescriptor, 'saved')
@@ -617,11 +629,18 @@ publicBeaconReceiver.addEventListener('targetschange', (event) => {
   )
 })
 renderPublicDiscovery()
-void publicBeaconReceiver.start()
-  .then((snapshot) => maybeAutoConnectPublic(snapshot))
-  .catch(() => {
-    // The receiver's bounded state event already renders the public failure.
-  })
+async function startPublicDiscovery(): Promise<void> {
+  publicAutoConnectSuppressed = false
+  disconnectButton.disabled = false
+  try { await maybeAutoConnectPublic(await publicBeaconReceiver.start()) }
+  catch { /* The receiver's bounded state event already renders the failure. */ }
+}
+if (panelMode) {
+  const stopFitting = fitPanelButtons(document.body)
+  window.addEventListener('pagehide', stopFitting, { once: true })
+  connectButton.disabled = false
+  connectionState.textContent = 'Panel ready. Select Connect to discover the public test-only Study 6 target.'
+} else void startPublicDiscovery()
 
 window.addEventListener('pagehide', () => {
   connectionGeneration += 1

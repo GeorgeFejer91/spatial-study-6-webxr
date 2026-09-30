@@ -56,6 +56,8 @@ export interface VdoNinjaSdk extends EventTarget {
     options?: VdoOpenChannelOptions,
   ): Promise<RTCDataChannel>
   disconnect(): Promise<void>
+  _getStorage?: (...args: unknown[]) => unknown
+  _setStorage?: (...args: unknown[]) => unknown
 }
 
 interface VdoNinjaConstructor {
@@ -118,7 +120,7 @@ export function createVdoSdk(
   forceTurn: boolean,
   pairingKey: string,
 ): VdoNinjaSdk {
-  return new Constructor({
+  const sdk = new Constructor({
     // The SDK hashes room/stream identifiers and encrypts SDP/ICE signaling when
     // a password is present. BRSP adds mutual HMAC proof, negotiated scopes,
     // replay/epoch fencing, and semantic command receipts inside WebRTC's DTLS
@@ -128,4 +130,14 @@ export function createVdoSdk(
     forceTURN: forceTurn,
     autoPingViewer: true,
   })
+  let storageAvailable = false
+  try { storageAvailable = Boolean(globalThis.localStorage) } catch { /* Opaque panel. */ }
+  if (!storageAvailable) {
+    if (typeof sdk._getStorage !== 'function' || typeof sdk._setStorage !== 'function') {
+      throw new Error('The pinned VDO.Ninja SDK cache hooks are unavailable.')
+    }
+    sdk._getStorage = () => null
+    sdk._setStorage = () => {}
+  }
+  return sdk
 }

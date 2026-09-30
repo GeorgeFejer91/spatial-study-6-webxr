@@ -29,6 +29,7 @@
     "vitest": "4.1.11"
   },
   "dependencies": {
+    "@chenglou/pretext": "0.0.9",
     "@iwsdk/xr-input": "0.5.3",
     "@pmndrs/pointer-events": "6.6.30",
     "@pmndrs/uikit": "1.0.75",
