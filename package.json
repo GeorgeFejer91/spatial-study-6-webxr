@@ -13,7 +13,9 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:e2e": "playwright test",
-    "check": "npm run test:run && npm run build"
+    "qualify:quest-companion": "node tools/qualify-quest-companion.mjs",
+    "check:qualification-harness": "node --check tools/qualify-quest-companion.mjs",
+    "check": "npm run test:run && npm run check:qualification-harness && npm run build"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",

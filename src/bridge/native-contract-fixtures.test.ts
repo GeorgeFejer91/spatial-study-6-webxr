@@ -113,21 +113,25 @@ describe('vendored native study6.bridge.v2 fixtures', () => {
   it('is byte-identical to the pinned canonical native schema and fixtures', async () => {
     const expected = {
       'study6-bridge-v2.schema.json':
-        '4B984196501F9981B7C751FB14F1BC59DB853C966D8F7EDF997DA6990D9BC695',
+        'FB068BF88D694AC88D6928E89D3F775F6B524FF09AF8E946F53687F45210F2C6',
       'fixtures/apk-hello.json':
-        'F83919FABC81FB3A45CF02564586D251AF097B93875B955207CBE60B37585889',
+        '0725C36DAD2DAF261274A35A53343C58048CB0C541822CFE08989EA87563F63D',
       'fixtures/apk-polar-status.json':
-        'E6F7D7E41C457CC0B6A1602870A184091D4ED40E8C65469E2FFA8D2E2FF77F22',
+        'DC5A2AFAA6494EB42FB031328C4C162540025F358FAA45F0CC1ACDF944F6F2AD',
       'fixtures/apk-snapshot.json':
-        '38CD3B5197E4A3A9E06EF62C1F2603EAD8FCC38879F1F29B55197DF7B7A3AECC',
+        '53666FF881014C328F22C564824A6675562572FBD8E68953B6EE0A759C0D2F00',
       'fixtures/begin-recording-command.json':
         'F574C1F6055DDA3E8A19EE4C1CB48F2287CD9240CE77C76DEE8E49852422BE77',
       'fixtures/record-experiment-marker-command.json':
         '0B11FD4A6079A66629CD2C1A70441C3D7FE304DB721F0B1B33AFF636D81804B2',
+      'fixtures/record-for-command.json':
+        '624A0F4A757AE72C3EAF69015271B7069750879A45CBA2C37AD4511B63BE19DC',
       'fixtures/request-status-command.json':
         'D1F59B83BF2F05B60204AE54D11BB7AE6CC404BB609F8D5C332DC9AF48E58860',
       'fixtures/webxr-hello.json':
-        'B84C6843FD4C8DBE2589583CE1C66F28A591BE32A456AA3B91E31316AC5CDEF8',
+        '57C339BD75E3F4A66FE985004255AEB103C9D7A4BDCE78D74CFDF8C80333A4A5',
+      'fixtures/verify-recording-artifact-command.json':
+        'C0EC3BC047E7F924E90BEA52A7019B102712FACEF50DCB289414EE19F6EC7123',
     } as const
     for (const [path, hash] of Object.entries(expected)) {
       await expect(sha256(path), path).resolves.toBe(hash)
@@ -146,6 +150,24 @@ describe('vendored native study6.bridge.v2 fixtures', () => {
         webxrRevision: 7,
         recordingRequestId: 'recording-request-001',
       },
+    })
+  })
+
+  it('accepts the native timed recording and artifact verification fixtures', async () => {
+    const timed = parseBridgeOutboundEnvelope(await readJson('fixtures/record-for-command.json'))
+    expect(timed.payload).toMatchObject({
+      action: 'record_for',
+      jobId: 'ecg-attempt-001',
+      artifactStem: 'ecg_PH1_HC_HE_b1_attempt001',
+      durationMs: 10_000,
+    })
+    const verify = parseBridgeOutboundEnvelope(
+      await readJson('fixtures/verify-recording-artifact-command.json'),
+    )
+    expect(verify.payload).toMatchObject({
+      action: 'verify_recording_artifact',
+      jobId: 'ecg-attempt-001',
+      artifactStem: 'ecg_PH1_HC_HE_b1_attempt001',
     })
   })
 

@@ -4,6 +4,12 @@ import type {
   CompanionStatus,
   RemoteMutationCommandRequest,
 } from '../companion/protocol.ts'
+import { CompanionHost } from '../companion/host.ts'
+import type {
+  BRSPCommandContext,
+  BRSPCommandOutcome,
+  JsonValue,
+} from '../companion/vendor/browser-remote-sync-protocol/brsp.js'
 
 vi.mock('./companion-controls.ts', () => ({
   CompanionControls: class {
@@ -12,6 +18,7 @@ vi.mock('./companion-controls.ts', () => ({
 }))
 
 import type { StudyMediaPlayer, StudyMediaSnapshot } from '../media/player.ts'
+import type { StimulusEffectReceipt } from '../media/stimulus-provider.ts'
 import {
   FakeStudyBridgeTransport,
   polarProjectionFromSnapshot,
@@ -41,6 +48,7 @@ import { StudyController } from './controller.ts'
 import type { StudyPanelRenderer } from './panel-renderer.ts'
 
 interface ControllerInternals {
+  bridge: StudyBridgeClient | null
   state: ExperimentState
   database: StudyDatabase | null
   durableRevision: number
@@ -57,6 +65,8 @@ interface ControllerInternals {
   startParticipant(participantId: string): Promise<boolean>
   submitDemographics(demographics: Demographics): Promise<void>
   startBlock(): Promise<boolean>
+  completeMedia(snapshot: StudyMediaSnapshot): Promise<void>
+  onMediaEffect(receipt: StimulusEffectReceipt): void
   advanceAssessment(): Promise<boolean>
   ensureSessionRecording(sessionId: string): Promise<boolean>
   companionStatus(): CompanionStatus
@@ -96,6 +106,11 @@ function blockReadyState(): ExperimentState {
       consentConfirmed: true,
     },
   })
+}
+
+interface CompanionHostInternals {
+  applyBrspCommand(command: BRSPCommandContext): Promise<BRSPCommandOutcome>
+  authoritativeStatus(): CompanionStatus
 }
 
 function participantEntryState(): ExperimentState {
@@ -158,6 +173,22 @@ function markerResult(accepted = true): BridgeCommandResult {
   }
 }
 
+function jobResult(code: string, accepted = true): BridgeCommandResult {
+  return {
+    commandId: 'sensor-job-command-1',
+    accepted,
+    stage: 'observed',
+    code,
+    detail: accepted ? '' : code,
+    resultingRevision: 2,
+  }
+}
+
+const bridgeFakeControls = new WeakMap<
+  object,
+  { target: ControllerInternals | null }
+>()
+
 function bridgeFake(
   record: (marker: BridgeExperimentMarker) => Promise<BridgeCommandResult> = async () =>
     markerResult(),
@@ -165,21 +196,83 @@ function bridgeFake(
   const recordExperimentMarker = vi.fn(record)
   const applySensorAction = vi.fn(async () => markerResult())
   const beginRecording = vi.fn(async () => markerResult())
-  return {
-    bridge: {
-      recordExperimentMarker,
-      applySensorAction,
-      beginRecording,
-    } as unknown as StudyBridgeClient,
+  const control = { target: null as ControllerInternals | null }
+  const setJob = (
+    plan: { jobId: string; artifactStem: string },
+    state: 'recording' | 'paused' | 'completed',
+  ) => {
+    const recording = control.target?.bridgeProjection?.snapshot?.recording
+    if (!recording) return
+    recording.job = {
+      state,
+      jobId: plan.jobId,
+      artifactStem: plan.artifactStem,
+      requestedDurationMs: 10_000,
+      activeDurationMs: state === 'completed' ? 10_000 : 100,
+      samplesWritten: state === 'completed' ? 1_300 : 13,
+      droppedBatches: 0,
+      artifactComplete: state === 'completed',
+      durable: true,
+    }
+  }
+  const recordFor = vi.fn(async (plan) => {
+    setJob(plan, 'recording')
+    return jobResult('recording_job_started')
+  })
+  const pauseRecordingJob = vi.fn(async (_sessionId, _revision, jobId) => {
+    const job = control.target?.bridgeProjection?.snapshot?.recording.job
+    if (job && typeof job.jobId === 'string' && job.jobId === jobId && typeof job.artifactStem === 'string') {
+      setJob({ jobId: job.jobId, artifactStem: job.artifactStem }, 'paused')
+    }
+    return jobResult('recording_job_paused')
+  })
+  const resumeRecordingJob = vi.fn(async (_sessionId, _revision, jobId) => {
+    const job = control.target?.bridgeProjection?.snapshot?.recording.job
+    if (job && typeof job.jobId === 'string' && job.jobId === jobId && typeof job.artifactStem === 'string') {
+      setJob({ jobId: job.jobId, artifactStem: job.artifactStem }, 'recording')
+    }
+    return jobResult('recording_job_resumed')
+  })
+  const stopRecordingJob = vi.fn(async (_sessionId, _revision, jobId) => {
+    const job = control.target?.bridgeProjection?.snapshot?.recording.job
+    if (job && typeof job.jobId === 'string' && job.jobId === jobId && typeof job.artifactStem === 'string') {
+      setJob({ jobId: job.jobId, artifactStem: job.artifactStem }, 'completed')
+    }
+    return jobResult('recording_job_completed')
+  })
+  const verifyRecordingArtifact = vi.fn(async () => jobResult('recording_artifact_verified'))
+  const bridge = {
     recordExperimentMarker,
     applySensorAction,
     beginRecording,
+    recordFor,
+    pauseRecordingJob,
+    resumeRecordingJob,
+    stopRecordingJob,
+    verifyRecordingArtifact,
+  } as unknown as StudyBridgeClient
+  bridgeFakeControls.set(bridge, control)
+  return {
+    bridge,
+    recordExperimentMarker,
+    applySensorAction,
+    beginRecording,
+    recordFor,
+    pauseRecordingJob,
+    resumeRecordingJob,
+    stopRecordingJob,
+    verifyRecordingArtifact,
   }
 }
 
 function setReadyBridgeProjection(internals: ControllerInternals): void {
+  const control = internals.bridge ? bridgeFakeControls.get(internals.bridge) : undefined
+  if (control) control.target = internals
   const polar = readyPolarProjection()
   const sessionId = internals.state.sessionId
+  const block = internals.state.blocks[internals.state.currentBlockIndex]
+  const participant = internals.state.participantId.replace(/[^A-Za-z0-9_-]/gu, '_').slice(0, 24)
+  const attempt = block?.attemptId.replace(/[^A-Za-z0-9_-]/gu, '_').slice(0, 64).slice(-40)
   const snapshot = acquisitionSnapshotPayload(0, polar)
   internals.polar = polar
   internals.bridgeProjection = {
@@ -187,7 +280,25 @@ function setReadyBridgeProjection(internals: ControllerInternals): void {
     sessionId,
     snapshot: {
       ...snapshot,
-      recording: { ...snapshot.recording, ownerSessionId: sessionId },
+      recording: {
+        ...snapshot.recording,
+        ownerSessionId: sessionId,
+        ...(block && attempt
+          ? {
+              job: {
+                state: 'recording' as const,
+                jobId: `ecg-${block.attemptId}`,
+                artifactStem: `ecg_${participant}_${block.conditionId}_b${block.blockOrder}_${attempt}`.slice(0, 96),
+                requestedDurationMs: 10_000,
+                activeDurationMs: 100,
+                samplesWritten: 13,
+                droppedBatches: 0,
+                artifactComplete: false,
+                durable: true,
+              },
+            }
+          : {}),
+      },
     },
   } as StudyBridgeProjection
 }
@@ -288,6 +399,70 @@ afterEach(() => {
 })
 
 describe('StudyController runtime durability', () => {
+  it('carries a companion start through WebXR into the timed recorder and projects the receipt outward', async () => {
+    const sensor = bridgeFake()
+    const fixture = controllerFixture(sensor.bridge)
+    const state = blockReadyState()
+    const database = databaseFake()
+    fixture.internals.state = state
+    fixture.internals.database = database as unknown as StudyDatabase
+    fixture.internals.durableRevision = 0
+    fixture.internals.controlEnabled = true
+    setReadyBridgeProjection(fixture.internals)
+
+    const host = new CompanionHost({
+      getStatus: () => fixture.internals.companionStatus(),
+      handleCommand: (request, expectedRevision) =>
+        fixture.internals.handleRemoteCommand(request, expectedRevision),
+    }) as unknown as CompanionHostInternals
+    const commandId = 'phone-start-condition-1'
+    const outcome = await host.applyBrspCommand({
+      commandId,
+      scope: 'study.media.control',
+      action: 'start_block',
+      args: {} as JsonValue,
+      expectedRevision: state.revision,
+    })
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      revision: state.revision + 1,
+      result: {
+        code: 'started',
+        stage: 'persisted',
+      },
+    })
+    expect(sensor.recordFor).toHaveBeenCalledOnce()
+    expect(sensor.recordFor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'session-1',
+        jobId: expect.stringMatching(/^ecg-/u),
+        artifactStem: expect.stringMatching(/^ecg_PH1_/u),
+        durationMs: 10_000,
+      }),
+      10_000,
+      'observed',
+    )
+    expect(sensor.recordExperimentMarker).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'block_start_intent' }),
+      'persisted',
+    )
+    expect(fixture.media.play).toHaveBeenCalledOnce()
+
+    const projected = host.authoritativeStatus()
+    expect(projected).toMatchObject({
+      revision: state.revision + 1,
+      phase: 'stimulus',
+      bridgeConnected: true,
+      recordingJobState: 'recording',
+      recordingJobRequestedDurationMs: 10_000,
+      recordingJobDurable: true,
+      remoteCommandReceiptId: commandId,
+    })
+    expect(JSON.stringify(projected)).not.toContain('artifactStem')
+    expect(JSON.stringify(projected)).not.toContain('ecg_PH1_')
+  })
+
   it('applies bounded remote setup and participant allocation through WebXR authority', async () => {
     const fixture = controllerFixture()
     const database = databaseFake()
@@ -515,7 +690,7 @@ describe('StudyController runtime durability', () => {
     expect(fixture.internals.durableRevision).toBe(1)
   })
 
-  it('rejects a remote start when media playback fails and does not persist the transition', async () => {
+  it('closes the condition window and enters technical hold when media playback fails', async () => {
     const sensor = bridgeFake()
     const fixture = controllerFixture(sensor.bridge)
     const state = blockReadyState()
@@ -530,9 +705,130 @@ describe('StudyController runtime durability', () => {
     await expect(
       fixture.internals.handleRemoteCommand({ name: 'start_block', args: {} }, state.revision),
     ).resolves.toMatchObject({ accepted: false, code: 'start_failed' })
-    expect(database.appendRevision).not.toHaveBeenCalled()
-    expect(fixture.internals.state.page).toBe('block_ready')
+    expect(
+      sensor.recordExperimentMarker.mock.calls.map(([marker]) => marker.eventType),
+    ).toEqual(['block_start_intent', 'technical_hold'])
+    expect(database.appendRevision).toHaveBeenCalledOnce()
+    expect(fixture.internals.state.page).toBe('technical_hold')
     expect(fixture.media.pause).toHaveBeenCalled()
+  })
+
+  it('durably closes the condition ECG window before opening questionnaires', async () => {
+    const sensor = bridgeFake()
+    const fixture = controllerFixture(sensor.bridge)
+    const database = databaseFake()
+    fixture.internals.state = acceptedState(blockReadyState(), {
+      type: 'start_block',
+      startedAtUtc: '2026-08-29T10:05:00.000Z',
+    })
+    fixture.internals.database = database as unknown as StudyDatabase
+    fixture.internals.durableRevision = fixture.internals.state.revision
+    setReadyBridgeProjection(fixture.internals)
+
+    await fixture.internals.completeMedia({
+      phase: 'ended',
+      durationMs: 10_000,
+      positionMs: 10_000,
+      assignment: null,
+      error: null,
+    })
+
+    expect(sensor.recordExperimentMarker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'media_ended',
+        sessionId: 'session-1',
+        blockOrder: 1,
+        conditionId: fixture.internals.state.blocks[0].conditionId,
+        mediaPositionMs: 10_000,
+      }),
+      'persisted',
+    )
+    expect(sensor.recordExperimentMarker.mock.invocationCallOrder[0]).toBeLessThan(
+      database.appendRevision.mock.invocationCallOrder[0],
+    )
+    expect(database.appendEvent).toHaveBeenCalledWith(
+      'session-1',
+      'sensor_marker_observed',
+      expect.objectContaining({
+        eventType: 'media_ended',
+        blockOrder: 1,
+        mediaPositionMs: 10_000,
+        polar: expect.objectContaining({
+          heartRateBpm: 64,
+          rrIntervalMs: 938,
+          ecgSampleRateHz: 130,
+        }),
+      }),
+    )
+    const sensorObservation = (
+      database.appendEvent.mock.calls as unknown as unknown[][]
+    ).find((call) => call[1] === 'sensor_marker_observed')?.[2] as {
+      polar?: Record<string, unknown>
+    }
+    expect(sensorObservation.polar).not.toHaveProperty('waveformMicrovolts')
+    expect(fixture.internals.state.page).toBe('self_assessment_manikin')
+  })
+
+  it('keeps questionnaires locked when the APK cannot close the condition ECG window', async () => {
+    const sensor = bridgeFake()
+    sensor.stopRecordingJob.mockResolvedValue(
+      jobResult('recording_job_finalization_failed', false),
+    )
+    const fixture = controllerFixture(sensor.bridge)
+    const database = databaseFake()
+    fixture.internals.state = acceptedState(blockReadyState(), {
+      type: 'start_block',
+      startedAtUtc: '2026-08-29T10:05:00.000Z',
+    })
+    fixture.internals.database = database as unknown as StudyDatabase
+    fixture.internals.durableRevision = fixture.internals.state.revision
+    setReadyBridgeProjection(fixture.internals)
+
+    await fixture.internals.completeMedia({
+      phase: 'ended',
+      durationMs: 10_000,
+      positionMs: 10_000,
+      assignment: null,
+      error: null,
+    })
+
+    expect(
+      sensor.recordExperimentMarker.mock.calls.map(([marker]) => marker.eventType),
+    ).toEqual(['technical_hold'])
+    expect(fixture.internals.state.page).toBe('technical_hold')
+    expect(fixture.internals.localMessage).toContain('Questionnaires remain locked')
+    expect(fixture.media.pause).toHaveBeenCalled()
+  })
+
+  it('persists browser media effect evidence with the owning condition tuple', async () => {
+    const fixture = controllerFixture()
+    const database = databaseFake()
+    fixture.internals.state = acceptedState(blockReadyState(), {
+      type: 'start_block',
+      startedAtUtc: '2026-08-29T10:05:00.000Z',
+    })
+    fixture.internals.database = database as unknown as StudyDatabase
+
+    fixture.internals.onMediaEffect({
+      providerId: 'placeholder.v1',
+      effect: 'playback_ended',
+      barrierId: null,
+      observedAtPerformanceMs: 12_345,
+      evidenceScope: 'browser-playback-state',
+    })
+
+    await vi.waitFor(() =>
+      expect(database.appendEvent).toHaveBeenCalledWith(
+        'session-1',
+        'stimulus_effect_observed',
+        expect.objectContaining({
+          blockOrder: 1,
+          conditionId: fixture.internals.state.blocks[0].conditionId,
+          mediaId: fixture.internals.state.blocks[0].mediaId,
+          receipt: expect.objectContaining({ effect: 'playback_ended' }),
+        }),
+      ),
+    )
   })
 
   it('retries one stable begin-recording request and blocks demographics until ownership is observed', async () => {
@@ -603,7 +899,9 @@ describe('StudyController runtime durability', () => {
 
     await expect(fixture.internals.startBlock()).resolves.toBe(false)
 
-    expect(sensor.recordExperimentMarker).toHaveBeenCalledOnce()
+    expect(
+      sensor.recordExperimentMarker.mock.calls.map(([marker]) => marker.eventType),
+    ).toEqual(['block_start_intent', 'technical_hold'])
     expect(sensor.recordExperimentMarker).toHaveBeenCalledWith(
       expect.objectContaining({
         eventType: 'block_start_intent',
@@ -616,9 +914,9 @@ describe('StudyController runtime durability', () => {
       'persisted',
     )
     expect(fixture.media.play).not.toHaveBeenCalled()
-    expect(database.appendRevision).not.toHaveBeenCalled()
-    expect(fixture.internals.state).toBe(state)
-    expect(fixture.internals.localMessage).toContain('start-intent marker was not confirmed')
+    expect(database.appendRevision).toHaveBeenCalledOnce()
+    expect(fixture.internals.state.page).toBe('technical_hold')
+    expect(fixture.internals.localMessage).toContain('start-intent marker')
   })
 
   it('stops media and durably enters technical hold when the media-started marker fails', async () => {

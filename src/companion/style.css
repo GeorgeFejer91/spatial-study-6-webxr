@@ -139,6 +139,17 @@ h2 {
   grid-row: 2 / span 2;
 }
 
+.pair-card__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pair-card__heading h2 {
+  margin: 0;
+}
+
 .status-card {
   grid-row: 4;
 }

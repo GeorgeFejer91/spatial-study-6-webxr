@@ -5,7 +5,12 @@ import {
   type BRSPRole,
   type BRSPTransport,
 } from './vendor/browser-remote-sync-protocol/brsp.js'
-import { eventDetail, type VdoChannelDetail, type VdoNinjaSdk } from './vdo-sdk'
+import {
+  eventDetail,
+  type VdoChannelDetail,
+  type VdoNinjaSdk,
+  type VdoPeerQuality,
+} from './vdo-sdk'
 
 export const VDO_BRSP_CONTROL_CHANNEL = 'brsp_control_v1'
 export const VDO_BRSP_STATE_CHANNEL = 'brsp_state_v1'
@@ -142,6 +147,22 @@ export class Study6BrspVdoPeerTransport extends EventTarget implements BRSPTrans
   closePeer(peerKey: string): void {
     if (this.peer?.peerKey !== peerKey) return
     this.closeCurrentPeer('BRSP peer closed locally.', false)
+  }
+
+  /**
+   * Return only a bounded route/RTT digest for the currently bound peer. Raw
+   * ICE candidates and network addresses never leave the SDK.
+   */
+  async getPeerQuality(): Promise<VdoPeerQuality | null> {
+    const peerKey = this.peer?.opened && !this.peer.closing
+      ? this.peer.peerKey
+      : null
+    if (!peerKey || !this.sdk.getPeerQuality) return null
+    try {
+      return await this.sdk.getPeerQuality(peerKey)
+    } catch {
+      return null
+    }
   }
 
   /** Close only the BRSP lanes and remove listeners; ownership of sdk stays with the caller. */

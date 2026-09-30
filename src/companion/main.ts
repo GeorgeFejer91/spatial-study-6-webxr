@@ -20,7 +20,6 @@ import {
   saveTrustedPairing,
 } from './trusted-pairing.ts'
 import {
-  deriveStudy6PublicPairingDescriptor,
   Study6PublicBeaconReceiver,
   type Study6PublicBeaconReceiverSnapshot,
   type Study6PublicBeaconTarget,
@@ -72,7 +71,6 @@ const startParticipantButton = element<HTMLButtonElement>('#start-participant')
 const participantHint = element<HTMLElement>('#participant-hint')
 
 let descriptor: PairingDescriptor | null = null
-let descriptorSource: PairingSource | null = null
 let viewer: CompanionViewer | null = null
 let latestStatus: CompanionStatus | null = null
 let autoReconnectEnabled = false
@@ -82,9 +80,6 @@ let connectionGeneration = 0
 let connectInFlightGeneration: number | null = null
 const publicBeaconReceiver = new Study6PublicBeaconReceiver()
 let latestPublicDiscovery = publicBeaconReceiver.snapshot()
-let selectedPublicHint: string | null = null
-let publicAutoConnectSuppressed = false
-let publicSelectionGeneration = 0
 
 function clearRetryTimer(): void {
   if (retryTimer !== undefined) window.clearTimeout(retryTimer)
@@ -122,23 +117,18 @@ function fragmentFromInput(value: string): string {
   }
 }
 
-type PairingSource = 'link' | 'manual' | 'saved' | 'public'
+type PairingSource = 'link' | 'manual' | 'saved'
 
 function acceptDescriptor(nextDescriptor: PairingDescriptor, source: PairingSource): boolean {
   descriptor = nextDescriptor
-  descriptorSource = source
   pairInput.value = ''
   if (source !== 'saved') forgetTrustedPairing()
   const persisted = source === 'saved'
-    || (source !== 'public' && persistDescriptor(nextDescriptor))
+    || persistDescriptor(nextDescriptor)
   forgetPairingButton.disabled = !persisted
-  pairingSummary.textContent = source === 'public'
-    ? `Public target ${selectedPublicHint?.slice(0, 8).toUpperCase() ?? 'UNKNOWN'} is selected. This open prototype derives its data-only BRSP session from the public beacon and requests the existing bounded Study 6 operator scopes automatically.`
-    : `BRSP pairing session ${nextDescriptor.streamId.slice(-8).toUpperCase()} is ready${nextDescriptor.forceTurn ? ' with TURN requested' : ''}. ${nextDescriptor.spectatorMedia ? 'Optional spectator monitoring is enabled.' : 'This is a data-only session.'} Full requested Study 6 operator scopes still require mutual proof and the headset grant. ${persisted ? 'This browser will remember the pairing until you select Forget pairing.' : 'Local storage is unavailable, so this pairing lasts only for the current page.'}`
+  pairingSummary.textContent = `Trusted BRSP pairing session ${nextDescriptor.streamId.slice(-8).toUpperCase()} is ready${nextDescriptor.forceTurn ? ' with TURN requested' : ''}. ${nextDescriptor.spectatorMedia ? 'Optional spectator monitoring is enabled.' : 'This is a data-only session.'} Full requested Study 6 operator scopes require possession of this private descriptor, mutual proof, and the headset grant. ${persisted ? 'This browser will remember the pairing until you select Forget pairing.' : 'Local storage is unavailable, so this pairing lasts only for the current page.'}`
   monitoringSection.hidden = !nextDescriptor.spectatorMedia
-  connectionState.textContent = source === 'public'
-    ? 'Public headset selected. Connecting automatically; select Cancel / disconnect to stop for this page.'
-    : source === 'manual'
+  connectionState.textContent = source === 'manual'
       ? 'Pairing accepted. Connecting automatically; select Cancel / disconnect to stop.'
       : 'Authenticated pairing request accepted. Connecting automatically; select Cancel / disconnect to stop.'
   connectButton.disabled = false
@@ -151,7 +141,6 @@ function applyDescriptor(fragment: string, source: Exclude<PairingSource, 'saved
     return acceptDescriptor(decodePairingDescriptor(fragment), source)
   } catch {
     descriptor = null
-    descriptorSource = null
     pairingSummary.textContent = 'The session pairing value is missing or invalid. Paste a fresh headset link below to replace it.'
     connectionState.textContent = 'Not paired; no connection was started.'
     connectButton.disabled = true
@@ -169,102 +158,24 @@ function orderedPublicTargets(
 function renderPublicDiscovery(snapshot = latestPublicDiscovery): void {
   latestPublicDiscovery = snapshot
   const targets = orderedPublicTargets(snapshot.targets)
-  const peerConnected = viewer?.snapshot().peerConnected === true
-  publicDiscoveryBadge.textContent = peerConnected && selectedPublicHint
-    ? 'Connected'
-    : publicAutoConnectSuppressed
-      ? 'Canceled'
-      : snapshot.phase === 'listening'
-        ? targets.length > 0 ? `${targets.length} online` : 'Listening'
-        : snapshot.phase === 'reconnecting'
-          ? 'Reconnecting'
-          : snapshot.phase === 'error' ? 'Unavailable' : 'Discovering'
+  publicDiscoveryBadge.textContent = snapshot.phase === 'listening'
+    ? targets.length > 0 ? `${targets.length} online` : 'Listening'
+    : snapshot.phase === 'reconnecting'
+      ? 'Reconnecting'
+      : snapshot.phase === 'error' ? 'Unavailable' : 'Discovering'
 
-  if (peerConnected && selectedPublicHint) {
-    const selected = targets.find(({ hint }) => hint === selectedPublicHint)
-    publicDiscoveryState.textContent = `${selected?.label ?? 'Public Study 6 headset'} is BRSP connected.`
-  } else if (publicAutoConnectSuppressed) {
-    publicDiscoveryState.textContent = 'Automatic public connection is canceled for this page. Reload or select Connect to resume.'
-  } else if (selectedPublicHint) {
-    const selected = targets.find(({ hint }) => hint === selectedPublicHint)
-    publicDiscoveryState.textContent = selected
-      ? `${selected.label} is public and ${peerConnected ? 'BRSP connected.' : 'selected for BRSP connection.'}`
-      : 'The selected public headset is temporarily absent from discovery; the active BRSP route may still repair.'
-  } else if (targets.length > 0) {
-    publicDiscoveryState.textContent = `${targets.length} public headset${targets.length === 1 ? '' : 's'} online. Selecting the first opaque beacon deterministically…`
+  if (targets.length > 0) {
+    publicDiscoveryState.textContent = `${targets.length} Study 6 headset${targets.length === 1 ? '' : 's'} online. Availability never grants control; open or paste that headset's private trusted-operator link.`
   } else {
     publicDiscoveryState.textContent = snapshot.message || 'Looking for public Study 6 headsets…'
   }
 
   publicTargetList.replaceChildren(...targets.map((target) => {
     const item = document.createElement('li')
-    const selected = target.hint === selectedPublicHint
-    item.dataset.selected = String(selected)
-    item.textContent = `${target.label} · ${selected ? peerConnected ? 'connected' : 'selected' : 'online'}`
+    item.dataset.selected = 'false'
+    item.textContent = `${target.label} · available · private pairing required`
     return item
   }))
-}
-
-async function maybeAutoConnectPublic(snapshot: Study6PublicBeaconReceiverSnapshot): Promise<void> {
-  renderPublicDiscovery(snapshot)
-  if (publicAutoConnectSuppressed || selectedPublicHint !== null) return
-  const targets = orderedPublicTargets(snapshot.targets)
-  const selected = targets[0]
-  if (!selected) return
-  const selectionGeneration = ++publicSelectionGeneration
-  try {
-    if (descriptor !== null) {
-      const currentDescriptor = descriptor
-      let firstPublicDescriptor: PairingDescriptor | null = null
-      for (const target of targets) {
-        const candidate = await deriveStudy6PublicPairingDescriptor(target.hint)
-        if (target.hint === selected.hint) firstPublicDescriptor = candidate
-        if (selectionGeneration !== publicSelectionGeneration) return
-        if (
-          candidate.room === currentDescriptor.room
-          && candidate.streamId === currentDescriptor.streamId
-          && candidate.key === currentDescriptor.key
-        ) {
-          selectedPublicHint = target.hint
-          renderPublicDiscovery()
-          return
-        }
-      }
-      if (descriptorSource === 'saved' && firstPublicDescriptor) {
-        connectionGeneration += 1
-        connectInFlightGeneration = null
-        stopAutomaticReconnect()
-        descriptor = null
-        descriptorSource = null
-        await stopCurrentViewer()
-        if (
-          selectionGeneration !== publicSelectionGeneration
-          || publicAutoConnectSuppressed
-          || !latestPublicDiscovery.targets.some(({ hint }) => hint === selected.hint)
-        ) return
-        selectedPublicHint = selected.hint
-        acceptDescriptor(firstPublicDescriptor, 'public')
-        renderPublicDiscovery()
-        void connect()
-      }
-      return
-    }
-    const publicDescriptor = await deriveStudy6PublicPairingDescriptor(selected.hint)
-    if (
-      selectionGeneration !== publicSelectionGeneration
-      || publicAutoConnectSuppressed
-      || descriptor !== null
-      || !latestPublicDiscovery.targets.some(({ hint }) => hint === selected.hint)
-    ) return
-    selectedPublicHint = selected.hint
-    acceptDescriptor(publicDescriptor, 'public')
-    renderPublicDiscovery()
-    void connect()
-  } catch {
-    if (selectionGeneration !== publicSelectionGeneration) return
-    publicDiscoveryBadge.textContent = 'Unavailable'
-    publicDiscoveryState.textContent = 'The public headset announcement was invalid and was ignored.'
-  }
 }
 
 function renderCommandAvailability(): void {
@@ -300,6 +211,22 @@ function renderConnection(snapshot: CompanionViewerSnapshot): void {
       ? snapshot.acceptedScopes.join(', ')
       : '—'
   }
+  const controllerRoute = document.querySelector<HTMLElement>(
+    '[data-field="controller-network-route"]',
+  )
+  if (controllerRoute) {
+    controllerRoute.textContent = snapshot.networkRoute === 'relay'
+      ? 'TURN relay'
+      : snapshot.networkRoute === 'direct' ? 'Direct WebRTC' : 'Unknown'
+  }
+  const controllerRtt = document.querySelector<HTMLElement>(
+    '[data-field="controller-network-rtt"]',
+  )
+  if (controllerRtt) {
+    controllerRtt.textContent = snapshot.networkRttMs === null
+      ? '—'
+      : `${snapshot.networkRttMs} ms`
+  }
   renderPublicDiscovery()
 }
 
@@ -327,6 +254,15 @@ function renderStatus(status: CompanionStatus): void {
   set('storage', status.storageHealthy ? 'Healthy' : 'Attention required')
   set('authority', 'WebXR experiment')
   set('remote-control', status.remoteControlEnabled ? 'Enabled on headset' : 'Read-only')
+  set('target-network-route', status.companionTargetRoute === 'relay'
+    ? 'TURN relay'
+    : status.companionTargetRoute === 'direct' ? 'Direct WebRTC' : 'Unknown')
+  set(
+    'target-network-rtt',
+    status.companionTargetRttMs === null || status.companionTargetRttMs === undefined
+      ? '—'
+      : `${status.companionTargetRttMs} ms`,
+  )
   set('bridge', status.bridgeConnected ? 'Connected' : 'Unavailable')
   set('sensor', `${status.polarPhase.replaceAll('_', ' ')}${status.polarReady ? ' · ready' : ''}`)
   set('sensor-reason', status.polarReadinessReason || '—')
@@ -348,6 +284,16 @@ function renderStatus(status: CompanionStatus): void {
   set('recording-drops', status.recordingDroppedBatches.toLocaleString())
   set('recording-artifact', status.recordingArtifactOpen ? 'Open' : 'Closed')
   set('recording-durable', status.recordingDurable ? 'Durable' : 'Not confirmed')
+  set('recording-job-state', status.recordingJobState.replaceAll('_', ' '))
+  const jobActiveSeconds = (status.recordingJobActiveDurationMs / 1_000).toFixed(1)
+  const jobTarget = status.recordingJobRequestedDurationMs === null
+    ? 'manual stop'
+    : `${(status.recordingJobRequestedDurationMs / 1_000).toFixed(1)} s target`
+  set('recording-job-time', `${jobActiveSeconds} s active · ${jobTarget}`)
+  set('recording-job-samples', status.recordingJobSamplesWritten.toLocaleString())
+  set('recording-job-drops', status.recordingJobDroppedBatches.toLocaleString())
+  set('recording-job-artifact', status.recordingJobArtifactComplete ? 'Complete' : 'Not complete')
+  set('recording-job-durable', status.recordingJobDurable ? 'Durable' : 'Not confirmed')
   set('writer-health', status.polarWriterHealthy ? 'Healthy' : 'Attention required')
   set('gaps', `${status.polarGapCount} gaps · ${status.polarReconnectCount} reconnects`)
   set('preflight', status.startPreflightReady
@@ -406,8 +352,6 @@ async function sendRemoteRequest(requestValue: RemoteCommandRequest): Promise<st
 async function connect(): Promise<void> {
   const generation = connectionGeneration
   if (!descriptor || connectInFlightGeneration === generation) return
-  publicAutoConnectSuppressed = false
-  renderPublicDiscovery()
   clearRetryTimer()
   autoReconnectEnabled = true
   connectInFlightGeneration = generation
@@ -471,6 +415,18 @@ async function stopCurrentViewer(): Promise<void> {
   await currentViewer?.stop()
   video.srcObject = null
   videoPlaceholder.hidden = false
+  routeBadge.textContent = 'Offline'
+  const scopes = document.querySelector<HTMLElement>('[data-field="scopes"]')
+  if (scopes) scopes.textContent = '—'
+  for (const field of [
+    'controller-network-route',
+    'controller-network-rtt',
+    'target-network-route',
+    'target-network-rtt',
+  ]) {
+    const value = document.querySelector<HTMLElement>(`[data-field="${field}"]`)
+    if (value) value.textContent = '—'
+  }
   renderCommandAvailability()
   disconnectButton.disabled = true
 }
@@ -478,26 +434,18 @@ async function stopCurrentViewer(): Promise<void> {
 async function disconnect(): Promise<void> {
   connectionGeneration += 1
   connectInFlightGeneration = null
-  publicSelectionGeneration += 1
-  publicAutoConnectSuppressed = true
   stopAutomaticReconnect()
   await stopCurrentViewer()
-  connectionState.textContent = selectedPublicHint
-    ? 'Disconnected. Automatic public reconnection is canceled until reload or an explicit Connect.'
-    : descriptor
-      ? 'Disconnected. Select Connect to authenticate again.'
+  connectionState.textContent = descriptor
+    ? 'Disconnected. Select Connect to authenticate again.'
     : 'Not paired.'
   connectButton.disabled = descriptor === null
   connectButton.textContent = 'Connect'
-  renderPublicDiscovery()
 }
 
 async function applyInputPairing(): Promise<void> {
   connectionGeneration += 1
   connectInFlightGeneration = null
-  publicSelectionGeneration += 1
-  publicAutoConnectSuppressed = true
-  selectedPublicHint = null
   stopAutomaticReconnect()
   await stopCurrentViewer()
   if (applyDescriptor(fragmentFromInput(pairInput.value), 'manual')) {
@@ -508,13 +456,9 @@ async function applyInputPairing(): Promise<void> {
 async function forgetPairing(): Promise<void> {
   connectionGeneration += 1
   connectInFlightGeneration = null
-  publicSelectionGeneration += 1
-  publicAutoConnectSuppressed = true
-  selectedPublicHint = null
   stopAutomaticReconnect()
   removeSavedDescriptor()
   descriptor = null
-  descriptorSource = null
   pairInput.value = ''
   connectButton.disabled = true
   await stopCurrentViewer()
@@ -612,13 +556,11 @@ publicBeaconReceiver.addEventListener('statechange', (event) => {
   renderPublicDiscovery((event as CustomEvent<Study6PublicBeaconReceiverSnapshot>).detail)
 })
 publicBeaconReceiver.addEventListener('targetschange', (event) => {
-  void maybeAutoConnectPublic(
-    (event as CustomEvent<Study6PublicBeaconReceiverSnapshot>).detail,
-  )
+  renderPublicDiscovery((event as CustomEvent<Study6PublicBeaconReceiverSnapshot>).detail)
 })
 renderPublicDiscovery()
 void publicBeaconReceiver.start()
-  .then((snapshot) => maybeAutoConnectPublic(snapshot))
+  .then((snapshot) => renderPublicDiscovery(snapshot))
   .catch(() => {
     // The receiver's bounded state event already renders the public failure.
   })
@@ -626,7 +568,6 @@ void publicBeaconReceiver.start()
 window.addEventListener('pagehide', () => {
   connectionGeneration += 1
   connectInFlightGeneration = null
-  publicSelectionGeneration += 1
   stopAutomaticReconnect()
   void viewer?.stop()
   void publicBeaconReceiver.stop()

@@ -7,14 +7,16 @@ import {
   disconnectedPolarStatus,
   polarProjectionIsReady,
   type BridgeExperimentMarker,
+  type BridgeNoArgumentSensorAction,
+  type BridgeRecordingJobPlan,
   type BridgeReceiptStage,
-  type BridgeSensorAction,
   type ExperimentMarkerEventType,
   type PolarStatusProjection,
   type StudyBridgeClient,
   type StudyBridgeProjection,
 } from '../bridge/index.ts'
 import { StudyMediaPlayer, type StudyMediaSnapshot } from '../media/player.ts'
+import type { StimulusEffectReceipt } from '../media/stimulus-provider.ts'
 import {
   downloadBlob,
   exportJsonBlob,
@@ -35,6 +37,7 @@ import {
   validateExperimentState,
   variantSpec,
   REMOTE_COMMAND_PROTOCOL,
+  TIMING_DURATION_MS,
   type Demographics,
   type ExperimentState,
   type LanguageCode,
@@ -59,10 +62,40 @@ function safeFilenameToken(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/gu, '_').slice(0, 64)
 }
 
+interface ConditionRecordingPlan extends BridgeRecordingJobPlan {
+  durationMs: number
+}
+
+function conditionRecordingPlan(state: ExperimentState): ConditionRecordingPlan | null {
+  const block = state.blocks[state.currentBlockIndex]
+  if (!state.sessionId || !state.configuration || !block || !state.participantId) return null
+  const participant = safeFilenameToken(state.participantId).slice(0, 24)
+  const attempt = safeFilenameToken(block.attemptId).slice(-40)
+  return {
+    sessionId: state.sessionId,
+    webxrRevision: state.revision,
+    jobId: `ecg-${block.attemptId}`,
+    artifactStem: `ecg_${participant}_${block.conditionId}_b${block.blockOrder}_${attempt}`.slice(
+      0,
+      96,
+    ),
+    durationMs: TIMING_DURATION_MS[state.configuration.timingMode],
+  }
+}
+
 type SensorMarkerMetadataSnapshot = Pick<
   BridgeExperimentMarker,
   'sessionId' | 'blockOrder' | 'conditionId' | 'mediaId'
 >
+
+const SENSOR_OBSERVATION_MARKERS = new Set<ExperimentMarkerEventType>([
+  'block_start_intent',
+  'media_started',
+  'media_paused',
+  'media_resumed',
+  'media_ended',
+  'technical_hold',
+])
 
 function snapshotSensorMarkerMetadata(state: ExperimentState): SensorMarkerMetadataSnapshot {
   const block = state.blocks[state.currentBlockIndex]
@@ -323,27 +356,57 @@ export class StudyController {
   }
 
   pauseMedia(): void {
-    void this.enqueue({ type: 'pause_media' }).then((accepted) => {
-      if (!accepted) return
-      this.media.pause()
-      void this.recordSensorMarker('media_paused', this.state, this.media.snapshot().positionMs)
-    })
+    void this.pauseMediaAndRecording()
   }
 
   resumeMedia(): void {
-    const playback = this.media.play()
-    void playback
-      .then(async () => {
-        if (!(await this.enqueue({ type: 'resume_media' }))) {
-          this.media.pause()
-          return
-        }
-        await this.recordSensorMarker('media_resumed', this.state, this.media.snapshot().positionMs)
-      })
-      .catch((error) => {
-        this.localMessage = error instanceof Error ? error.message : String(error)
-        this.render()
-      })
+    void this.resumeMediaAndRecording()
+  }
+
+  private async pauseMediaAndRecording(): Promise<boolean> {
+    if (!(await this.enqueue({ type: 'pause_media' }))) return false
+    this.media.pause()
+    const plan = conditionRecordingPlan(this.state)
+    if (!plan || !(await this.applyRecordingJobControl('pause', plan))) {
+      await this.enterTechnicalHold('condition_recording_pause_failed')
+      this.localMessage =
+        'Media is paused and the block is in technical hold because the ECG recording job did not pause durably.'
+      this.render()
+      return false
+    }
+    return this.recordSensorMarker(
+      'media_paused',
+      this.state,
+      this.media.snapshot().positionMs,
+    )
+  }
+
+  private async resumeMediaAndRecording(): Promise<boolean> {
+    try {
+      await this.media.play()
+    } catch (error) {
+      this.localMessage = error instanceof Error ? error.message : String(error)
+      this.render()
+      return false
+    }
+    if (!(await this.enqueue({ type: 'resume_media' }))) {
+      this.media.pause()
+      return false
+    }
+    const plan = conditionRecordingPlan(this.state)
+    if (!plan || !(await this.applyRecordingJobControl('resume', plan))) {
+      this.media.pause()
+      await this.enterTechnicalHold('condition_recording_resume_failed')
+      this.localMessage =
+        'Media stopped and the block entered technical hold because the ECG recording job did not resume.'
+      this.render()
+      return false
+    }
+    return this.recordSensorMarker(
+      'media_resumed',
+      this.state,
+      this.media.snapshot().positionMs,
+    )
   }
 
   private enqueue(action: StudyAction): Promise<boolean> {
@@ -508,23 +571,68 @@ export class StudyController {
   }
 
   private async completeMedia(snapshot: StudyMediaSnapshot): Promise<void> {
+    const recordingPlan = conditionRecordingPlan(this.state)
+    if (!recordingPlan || !(await this.stopAndVerifyRecordingJob(recordingPlan))) {
+      this.media.pause()
+      await this.enterTechnicalHold('condition_recording_verification_failed')
+      this.localMessage =
+        'Questionnaires remain locked because the APK did not verify the completed condition ECG CSV.'
+      this.render()
+      return
+    }
+    const endedRecorded = await this.recordSensorMarker(
+      'media_ended',
+      this.state,
+      snapshot.positionMs,
+    )
+    if (!endedRecorded) {
+      this.media.pause()
+      await this.enterTechnicalHold('media_ended_marker_failed')
+      this.localMessage =
+        'Questionnaires remain locked because the APK did not durably close the condition ECG window.'
+      this.render()
+      return
+    }
     const accepted = await this.enqueue({
       type: 'complete_stimulus',
       observedDurationMs: snapshot.durationMs,
       endedAtUtc: new Date().toISOString(),
     })
     if (!accepted) {
-      this.localMessage = `${this.localMessage} Select the media surface to retry saving completion.`.trim()
+      this.media.pause()
+      await this.enterTechnicalHold('stimulus_completion_persistence_failed')
+      this.localMessage = `${this.localMessage} The ECG window is closed, but the browser could not save stimulus completion.`.trim()
       this.render()
       return
     }
-    await this.recordSensorMarker('media_ended', this.state, snapshot.positionMs)
+  }
+
+  onMediaEffect(receipt: StimulusEffectReceipt): void {
+    const sessionId = this.state.sessionId
+    const database = this.database
+    if (!sessionId || !database) return
+    const metadata = snapshotSensorMarkerMetadata(this.state)
+    void database
+      .appendEvent(sessionId, 'stimulus_effect_observed', {
+        webxrRevision: this.state.revision,
+        ...metadata,
+        receipt,
+      })
+      .catch((error) => {
+        this.storageHealthy = false
+        this.localMessage = `A browser media-effect observation could not be saved: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+        this.render()
+      })
   }
 
   private async enterTechnicalHold(reason: string): Promise<boolean> {
+    const recordingPlan = conditionRecordingPlan(this.state)
+    if (recordingPlan) await this.stopRecordingJob(recordingPlan)
+    const markerSaved = await this.recordSensorMarker('technical_hold', this.state)
     const accepted = await this.enqueue({ type: 'enter_technical_hold', reason })
-    if (accepted) await this.recordSensorMarker('technical_hold', this.state)
-    return accepted
+    return accepted && markerSaved
   }
 
   private async recordSensorMarker(
@@ -573,6 +681,54 @@ export class StudyController {
       this.sensorMessage = receipt.accepted
         ? ''
         : receipt.detail || `The APK rejected ${eventType}.`
+      if (
+        receipt.accepted &&
+        state.sessionId &&
+        this.database &&
+        SENSOR_OBSERVATION_MARKERS.has(eventType)
+      ) {
+        try {
+          const recording = this.bridgeProjection?.snapshot?.recording
+          await this.database.appendEvent(state.sessionId, 'sensor_marker_observed', {
+            markerId: marker.markerId,
+            eventType: marker.eventType,
+            webxrRevision: marker.webxrRevision,
+            blockOrder: marker.blockOrder ?? null,
+            conditionId: marker.conditionId ?? null,
+            mediaId: marker.mediaId ?? null,
+            mediaPositionMs: marker.mediaPositionMs ?? null,
+            browserMonotonicMs: marker.browserMonotonicMs,
+            browserUtc: marker.browserUtc,
+            polar: {
+              heartRateBpm: this.polar.heartRateBpm,
+              rrIntervalMs: this.polar.rrIntervalMs,
+              rrIntervalCount: this.polar.rrIntervalCount,
+              ecgSampleRateHz: this.polar.ecgSampleRateHz,
+              ecgSampleCount: this.polar.ecgSampleCount,
+              lastSampleAgeMs: this.polar.lastSampleAgeMs,
+              reconnectCount: this.polar.reconnectCount,
+              gapCount: this.polar.gapCount,
+              writerHealthy: this.polar.writer.healthy,
+              writerQueueDepth: this.polar.writer.queueDepth,
+            },
+            recorder: recording
+              ? {
+                  recordingEpoch: recording.recordingEpoch,
+                  revision: recording.revision,
+                  samplesWritten: recording.samplesWritten,
+                  droppedBatches: recording.droppedBatches,
+                  durable: recording.durable,
+                }
+              : null,
+          })
+        } catch (error) {
+          this.sensorMessage = `The APK persisted ${eventType}, but its matching browser sensor observation could not be saved: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+          this.render()
+          return false
+        }
+      }
       this.render()
       return receipt.accepted
     } catch (error) {
@@ -590,7 +746,7 @@ export class StudyController {
   }
 
   private async applySensorOperation(
-    action: Exclude<BridgeSensorAction, 'begin_recording' | 'record_experiment_marker'>,
+    action: BridgeNoArgumentSensorAction,
     targetStage: BridgeReceiptStage,
   ): Promise<boolean> {
     if (!this.bridge) {
@@ -605,6 +761,135 @@ export class StudyController {
       return receipt.accepted
     } catch (error) {
       this.sensorMessage = error instanceof Error ? error.message : String(error)
+      this.render()
+      return false
+    }
+  }
+
+  private async startConditionRecording(plan: ConditionRecordingPlan): Promise<boolean> {
+    if (!this.bridge) return false
+    try {
+      const receipt = await this.bridge.recordFor(plan, plan.durationMs, 'observed')
+      const job = this.bridgeProjection?.snapshot?.recording.job
+      const observed =
+        receipt.accepted &&
+        job?.state === 'recording' &&
+        job.jobId === plan.jobId &&
+        job.artifactStem === plan.artifactStem &&
+        job.requestedDurationMs === plan.durationMs &&
+        job.durable &&
+        !job.artifactComplete
+      this.sensorMessage = observed
+        ? ''
+        : receipt.detail || 'The APK did not observe the requested timed ECG recording job.'
+      this.render()
+      return observed
+    } catch (error) {
+      this.sensorMessage = `record_for failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+      this.render()
+      return false
+    }
+  }
+
+  private async applyRecordingJobControl(
+    operation: 'pause' | 'resume',
+    plan: ConditionRecordingPlan,
+  ): Promise<boolean> {
+    if (!this.bridge) return false
+    try {
+      const receipt =
+        operation === 'pause'
+          ? await this.bridge.pauseRecordingJob(
+              plan.sessionId,
+              plan.webxrRevision,
+              plan.jobId,
+              'observed',
+            )
+          : await this.bridge.resumeRecordingJob(
+              plan.sessionId,
+              plan.webxrRevision,
+              plan.jobId,
+              'observed',
+            )
+      const job = this.bridgeProjection?.snapshot?.recording.job
+      const observed =
+        receipt.accepted &&
+        job?.jobId === plan.jobId &&
+        job.artifactStem === plan.artifactStem &&
+        job.state === (operation === 'pause' ? 'paused' : 'recording') &&
+        job.durable
+      this.sensorMessage = observed
+        ? ''
+        : receipt.detail || `The APK did not observe the ECG recording job ${operation}.`
+      this.render()
+      return observed
+    } catch (error) {
+      this.sensorMessage = `recording job ${operation} failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+      this.render()
+      return false
+    }
+  }
+
+  private async stopRecordingJob(plan: ConditionRecordingPlan): Promise<boolean> {
+    if (!this.bridge) return false
+    try {
+      const receipt = await this.bridge.stopRecordingJob(
+        plan.sessionId,
+        plan.webxrRevision,
+        plan.jobId,
+        'observed',
+      )
+      const job = this.bridgeProjection?.snapshot?.recording.job
+      const observed =
+        receipt.accepted &&
+        job?.state === 'completed' &&
+        job.jobId === plan.jobId &&
+        job.artifactStem === plan.artifactStem &&
+        job.artifactComplete &&
+        job.durable
+      this.sensorMessage = observed
+        ? ''
+        : receipt.detail || 'The APK did not durably complete the condition recording job.'
+      this.render()
+      return observed
+    } catch (error) {
+      this.sensorMessage = `stop_recording_job failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+      this.render()
+      return false
+    }
+  }
+
+  private async stopAndVerifyRecordingJob(plan: ConditionRecordingPlan): Promise<boolean> {
+    if (!(await this.stopRecordingJob(plan)) || !this.bridge) return false
+    try {
+      const receipt = await this.bridge.verifyRecordingArtifact(plan, 'observed')
+      const job = this.bridgeProjection?.snapshot?.recording.job
+      const observed =
+        receipt.accepted &&
+        receipt.code === 'recording_artifact_verified' &&
+        job?.state === 'completed' &&
+        job.jobId === plan.jobId &&
+        job.artifactStem === plan.artifactStem &&
+        job.requestedDurationMs === plan.durationMs &&
+        job.samplesWritten > 0 &&
+        job.droppedBatches === 0 &&
+        job.artifactComplete &&
+        job.durable
+      this.sensorMessage = observed
+        ? ''
+        : receipt.detail || 'The completed condition ECG artifact did not pass verification.'
+      this.render()
+      return observed
+    } catch (error) {
+      this.sensorMessage = `verify_recording_artifact failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
       this.render()
       return false
     }
@@ -718,10 +1003,19 @@ export class StudyController {
         },
         0,
       )
+      const recordingPlan = conditionRecordingPlan(this.state)
+      if (!recordingPlan || !(await this.startConditionRecording(recordingPlan))) {
+        this.localMessage =
+          'Block start was stopped because the APK did not observe the timed, condition-named ECG recording job.'
+        this.render()
+        return false
+      }
       const intentRecorded = await this.recordSensorMarker('block_start_intent', this.state, 0)
       if (!intentRecorded) {
+        await this.stopRecordingJob(recordingPlan)
+        await this.enterTechnicalHold('block_start_intent_failed')
         this.localMessage =
-          'Block start was stopped because the durable ECG start-intent marker was not confirmed.'
+          'Block start was stopped and moved to technical hold because the durable ECG start-intent marker or its browser observation was not confirmed.'
         this.render()
         return false
       }
@@ -732,6 +1026,7 @@ export class StudyController {
       })
       if (!accepted) {
         this.media.pause()
+        await this.enterTechnicalHold('block_start_persistence_failed')
         return false
       }
       const startedRecorded = await this.recordSensorMarker('media_started', this.state, 0)
@@ -748,6 +1043,7 @@ export class StudyController {
     } catch (error) {
       this.localMessage = error instanceof Error ? error.message : String(error)
       this.media.pause()
+      await this.enterTechnicalHold('media_start_failed')
       this.render()
       return false
     } finally {
@@ -813,6 +1109,7 @@ export class StudyController {
     const media = this.media.snapshot()
     const bridgeConnected = this.bridgeProjection?.sensorConnected ?? false
     const recording = this.bridgeProjection?.snapshot?.recording ?? null
+    const recordingJob = recording?.job ?? null
     const polarReady = polarProjectionIsReady(this.polar)
     const startPreflightReady = this.bridgeStartPreflightReady() && this.state.page === 'block_ready'
     return {
@@ -849,6 +1146,22 @@ export class StudyController {
       ),
       recordingArtifactOpen: recording?.artifactOpen ?? false,
       recordingDurable: recording?.durable ?? false,
+      recordingJobState: recordingJob?.state ?? 'idle',
+      recordingJobRequestedDurationMs: recordingJob?.requestedDurationMs ?? null,
+      recordingJobActiveDurationMs: Math.min(
+        recordingJob?.activeDurationMs ?? 0,
+        86_400_000,
+      ),
+      recordingJobSamplesWritten: Math.min(
+        recordingJob?.samplesWritten ?? 0,
+        Number.MAX_SAFE_INTEGER,
+      ),
+      recordingJobDroppedBatches: Math.min(
+        recordingJob?.droppedBatches ?? 0,
+        Number.MAX_SAFE_INTEGER,
+      ),
+      recordingJobArtifactComplete: recordingJob?.artifactComplete ?? false,
+      recordingJobDurable: recordingJob?.durable ?? false,
       polarPhase: this.polar.phase,
       polarReady,
       polarReadinessReason: this.polar.readinessReason.slice(0, 240),
@@ -953,43 +1266,22 @@ export class StudyController {
             })
           : { accepted: false, code: 'start_failed', message: this.localMessage }
       case 'pause_media':
-        if (await this.enqueue({ type: 'pause_media' })) {
-          this.media.pause()
-          await this.recordSensorMarker(
-            'media_paused',
-            this.state,
-            this.media.snapshot().positionMs,
-          )
+        if (await this.pauseMediaAndRecording()) {
           return this.withPersistedWebXrEffect({
             accepted: true,
             code: 'paused',
-            message: 'Media paused.',
+            message: 'Media and the ECG recording job paused.',
           })
         }
         return { accepted: false, code: 'pause_failed', message: this.localMessage }
       case 'resume_media':
-        try {
-          await this.media.play()
-        } catch (error) {
-          return {
-            accepted: false,
-            code: 'local_gesture_required',
-            message: error instanceof Error ? error.message : String(error),
-          }
-        }
-        if (await this.enqueue({ type: 'resume_media' })) {
-          await this.recordSensorMarker(
-            'media_resumed',
-            this.state,
-            this.media.snapshot().positionMs,
-          )
+        if (await this.resumeMediaAndRecording()) {
           return this.withPersistedWebXrEffect({
             accepted: true,
             code: 'resumed',
-            message: 'Media resumed.',
+            message: 'Media and the ECG recording job resumed.',
           })
         }
-        this.media.pause()
         return { accepted: false, code: 'resume_failed', message: this.localMessage }
       case 'advance_assessment':
         return (await this.advanceAssessment())
@@ -1030,8 +1322,12 @@ export class StudyController {
       return { accepted: false, code: 'abort_failed', message: this.localMessage }
     }
     this.media.pause()
+    const recordingPlan = conditionRecordingPlan(this.state)
+    const jobStopped = !recordingPlan || (await this.stopRecordingJob(recordingPlan))
     const marked = await this.recordSensorMarker('session_aborted', this.state)
-    const finalized = !this.bridge || (marked && (await this.applySensorOperation('finalize_recording', 'persisted')))
+    const finalized =
+      !this.bridge ||
+      (jobStopped && marked && (await this.applySensorOperation('finalize_recording', 'persisted')))
     return this.withPersistedWebXrEffect({
       accepted: true,
       code: finalized ? 'aborted' : 'aborted_sensor_attention',
@@ -1042,7 +1338,7 @@ export class StudyController {
   }
 
   private async forwardSensorAction(
-    action: Exclude<BridgeSensorAction, 'begin_recording' | 'record_experiment_marker'>,
+    action: BridgeNoArgumentSensorAction,
     targetStage: BridgeReceiptStage,
   ): Promise<CommandDecision> {
     if (!this.bridge) {

@@ -359,6 +359,130 @@ describe('StudyBridgeClient sensor-recorder semantics', () => {
     })
   })
 
+  it('sends a timed recording job with only the bounded plan and duration', async () => {
+    const { client, transport, common } = fixture()
+    await client.connect()
+    transport.receive(hello(common))
+    transport.receive(snapshot(common, acquisitionSnapshotPayload()))
+
+    const plan = {
+      sessionId: 'session-1',
+      webxrRevision: 8,
+      jobId: 'ecg-attempt-1',
+      artifactStem: 'ecg_HC_HE_block_1',
+    }
+    const result = client.recordFor(plan, 300_000)
+    await vi.waitFor(() =>
+      expect(transport.sent.filter((message) => message.type === 'command')).toHaveLength(1),
+    )
+    const command = transport.sent.at(-1)!
+    expect(command).toMatchObject({
+      sessionId: 'session-1',
+      expectedRevision: 0,
+      type: 'command',
+      payload: { action: 'record_for', ...plan, durationMs: 300_000 },
+    })
+    expect(Object.keys(command.payload).sort()).toEqual(
+      ['action', 'artifactStem', 'durationMs', 'jobId', 'sessionId', 'webxrRevision'].sort(),
+    )
+
+    transport.receive(
+      receipt(common, command.messageId, {
+        stage: 'observed',
+        effectiveRevision: 1,
+        outcome: 'recording_job_started',
+      }),
+    )
+    const recording = acquisitionSnapshotPayload(1)
+    recording.recording.ownerSessionId = 'session-1'
+    recording.recording.job = {
+      state: 'recording',
+      jobId: plan.jobId,
+      artifactStem: plan.artifactStem,
+      requestedDurationMs: 300_000,
+      activeDurationMs: 0,
+      samplesWritten: 0,
+      droppedBatches: 0,
+      artifactComplete: false,
+      durable: true,
+    }
+    transport.receive({ ...snapshot(common, recording), sessionId: 'session-1' })
+
+    await expect(result).resolves.toMatchObject({
+      stage: 'observed',
+      resultingRevision: 1,
+    })
+  })
+
+  it('returns separate observed-start and durable-finish confirmations for a timed job', async () => {
+    const { client, transport, common } = fixture()
+    await client.connect()
+    transport.receive(hello(common))
+    transport.receive(snapshot(common, acquisitionSnapshotPayload()))
+    const plan = {
+      sessionId: 'session-1',
+      webxrRevision: 8,
+      jobId: 'future-study-job-1',
+      artifactStem: 'future_study_condition_1',
+    }
+
+    const result = client.recordForUntilCompleted(plan, 1_000, 2_000)
+    await vi.waitFor(() =>
+      expect(transport.sent.filter((message) => message.type === 'command')).toHaveLength(1),
+    )
+    const command = transport.sent.at(-1)!
+    transport.receive(
+      receipt(common, command.messageId, {
+        stage: 'observed',
+        effectiveRevision: 1,
+        outcome: 'recording_job_started',
+      }),
+    )
+    const started = acquisitionSnapshotPayload(1)
+    started.recording.ownerSessionId = plan.sessionId
+    started.recording.job = {
+      state: 'recording',
+      jobId: plan.jobId,
+      artifactStem: plan.artifactStem,
+      requestedDurationMs: 1_000,
+      activeDurationMs: 0,
+      samplesWritten: 0,
+      droppedBatches: 0,
+      artifactComplete: false,
+      durable: true,
+    }
+    transport.receive({ ...snapshot(common, started), sessionId: plan.sessionId })
+    await Promise.resolve()
+
+    const completed = structuredClone(started)
+    completed.recording.revision = 2
+    completed.recording.job = {
+      ...started.recording.job,
+      state: 'completed',
+      activeDurationMs: 1_000,
+      samplesWritten: 130,
+      artifactComplete: true,
+      durable: true,
+    }
+    transport.receive({
+      ...snapshot({ ...common, revision: 2 }, completed),
+      sessionId: plan.sessionId,
+    })
+
+    await expect(result).resolves.toMatchObject({
+      started: { accepted: true, stage: 'observed', code: 'recording_job_started' },
+      completed: {
+        state: 'completed',
+        jobId: plan.jobId,
+        artifactStem: plan.artifactStem,
+        activeDurationMs: 1_000,
+        samplesWritten: 130,
+        artifactComplete: true,
+        durable: true,
+      },
+    })
+  })
+
   it('projects only monotonic recording snapshots from current page and transport epochs', async () => {
     const { client, transport, common } = fixture()
     await client.connect()

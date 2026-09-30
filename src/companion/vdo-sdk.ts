@@ -28,6 +28,12 @@ export interface VdoOpenChannelOptions {
   timeout?: number
 }
 
+/** Privacy-bounded digest from the selected WebRTC candidate pair. */
+export interface VdoPeerQuality {
+  rttMs: number | null
+  relayed: boolean | null
+}
+
 export interface VdoNinjaSdk extends EventTarget {
   connect(options?: Record<string, unknown>): Promise<void>
   joinRoom(options: { room: string; password?: string | false }): Promise<void>
@@ -55,6 +61,7 @@ export interface VdoNinjaSdk extends EventTarget {
     label: string,
     options?: VdoOpenChannelOptions,
   ): Promise<RTCDataChannel>
+  getPeerQuality?(uuid: string): Promise<VdoPeerQuality | null>
   disconnect(): Promise<void>
 }
 

@@ -166,6 +166,25 @@ export const CompanionStatusSchema = z.object({
   recordingDroppedBatches: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   recordingArtifactOpen: z.boolean(),
   recordingDurable: z.boolean(),
+  recordingJobState: z.enum([
+    'idle',
+    'recording',
+    'paused',
+    'stopping',
+    'completed',
+    'fault',
+  ]),
+  recordingJobRequestedDurationMs: z
+    .number()
+    .int()
+    .min(100)
+    .max(86_400_000)
+    .nullable(),
+  recordingJobActiveDurationMs: z.number().int().nonnegative().max(86_400_000),
+  recordingJobSamplesWritten: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  recordingJobDroppedBatches: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  recordingJobArtifactComplete: z.boolean(),
+  recordingJobDurable: z.boolean(),
   polarPhase: z.enum([
     'unavailable',
     'permission_required',
@@ -187,6 +206,9 @@ export const CompanionStatusSchema = z.object({
   polarGapCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   startPreflightReady: z.boolean(),
   lastReceiptStage: z.enum(BRIDGE_RECEIPT_STAGES).nullable(),
+  /** Sanitized target-side ICE readback; never includes candidate addresses. */
+  companionTargetRoute: z.enum(['direct', 'relay', 'unknown']).optional(),
+  companionTargetRttMs: z.number().int().min(0).max(60_000).nullable().optional(),
   /**
    * BRSP target-local correlation marker. The controller uses this to prove
    * that a status projection was produced after a specific command outcome;

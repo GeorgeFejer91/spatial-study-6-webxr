@@ -16,21 +16,26 @@
         <p class="eyebrow">Operator companion · test-only</p>
         <h1 id="page-title">Spatial Study 6</h1>
         <p class="lede">
-          This page discovers public Study 6 headsets and opens their data-only BRSP/1 operator
-          channel automatically. Spectator video is a separate monitoring plane and is off by default.
+          This page discovers available Study 6 headsets, but opens a data-only BRSP/1 operator
+          channel only with a private trusted link. Spectator video is a separate monitoring plane
+          and is off by default.
         </p>
       </header>
 
       <section class="pair-card" aria-labelledby="pair-title">
         <div>
-          <h2 id="pair-title">Public headset connection</h2>
+          <div class="pair-card__heading">
+            <h2 id="pair-title">Trusted headset connection</h2>
+            <span id="route-badge" class="badge">Offline</span>
+          </div>
           <p id="pairing-summary">
-            Public discovery starts automatically. The first opaque headset beacon connects without a code.
+            Public availability discovery starts automatically. Pair once with the private link or QR
+            shown by WebXR; this browser can remember it for later automatic reconnects.
           </p>
         </div>
         <div class="public-discovery" aria-labelledby="public-discovery-title">
           <div class="public-discovery__heading">
-            <h3 id="public-discovery-title">Public beacon</h3>
+            <h3 id="public-discovery-title">Availability beacon</h3>
             <span id="public-discovery-badge" class="badge">Discovering</span>
           </div>
           <p id="public-discovery-state" class="state" role="status">
@@ -39,11 +44,11 @@
           <ul id="public-target-list" class="public-target-list" aria-label="Online public Study 6 headsets"></ul>
         </div>
         <p class="pairing-convenience">
-          This is an intentionally open prototype: any visitor can derive the same bounded operator
-          session from a listed beacon. Cancel stops automatic reconnection until reload or an explicit Connect.
-          A private link can still be pasted below as a manual override.
+          An availability handle contains no room, stream, key, participant identity, or control
+          capability. Open a private WebXR-generated link once; subsequent bare visits reconnect from
+          this browser's locally stored bearer credential until you select Forget pairing.
         </p>
-        <label class="pair-input-label" for="pair-input">Optional private session link or pairing code</label>
+        <label class="pair-input-label" for="pair-input">Private trusted-operator link or pairing value</label>
         <div class="pair-row">
           <input id="pair-input" type="password" autocomplete="off" spellcheck="false" />
           <button id="apply-pair" class="secondary" type="button">Apply / replace</button>
@@ -57,13 +62,12 @@
         <details>
           <summary>Privacy and network disclosure</summary>
           <p>
-            Discovery and control contact VDO.Ninja’s public signaling and STUN/TURN infrastructure. A direct
+            Discovery and control contact VDO.Ninja’s signaling and STUN/TURN infrastructure. A direct
             WebRTC route can disclose peer IP addresses. If optional monitoring was explicitly
             enabled, its spectator image may contain participant-entered text. The public beacon is
-            not identity authentication: any browser visiting this page can derive the same session
-            key and request the existing bounded Study 6 operator scopes. The target still accepts
+            availability only and cannot be converted into a control credential. The target still accepts
             only typed experiment commands and never sends raw ECG, participant identifiers,
-            demographics, or questionnaire answers. A manually supplied private descriptor may be
+            demographics, or questionnaire answers. A supplied private descriptor may be
             retained locally until <strong>Forget pairing</strong>; URL fragments are removed before
             any connection starts.
           </p>
@@ -76,7 +80,6 @@
             <p class="eyebrow">Live spectator mirror</p>
             <h2 id="mirror-title">Headset view</h2>
           </div>
-          <span id="route-badge" class="badge">Offline</span>
         </div>
         <div class="video-frame">
           <video id="spectator-video" autoplay muted playsinline></video>
@@ -188,6 +191,10 @@
           <div><dt>Authority</dt><dd data-field="authority">—</dd></div>
           <div><dt>Remote control</dt><dd data-field="remote-control">—</dd></div>
           <div><dt>Negotiated scopes</dt><dd data-field="scopes">—</dd></div>
+          <div><dt>Phone-observed route</dt><dd data-field="controller-network-route">—</dd></div>
+          <div><dt>Phone-observed RTT</dt><dd data-field="controller-network-rtt">—</dd></div>
+          <div><dt>Headset-observed route</dt><dd data-field="target-network-route">—</dd></div>
+          <div><dt>Headset-observed RTT</dt><dd data-field="target-network-rtt">—</dd></div>
           <div><dt>APK bridge</dt><dd data-field="bridge">—</dd></div>
           <div><dt>Polar H10</dt><dd data-field="sensor">—</dd></div>
           <div><dt>Readiness</dt><dd data-field="sensor-reason">—</dd></div>
@@ -201,6 +208,12 @@
           <div><dt>Dropped ECG batches</dt><dd data-field="recording-drops">—</dd></div>
           <div><dt>Recording artifact</dt><dd data-field="recording-artifact">—</dd></div>
           <div><dt>Recording durability</dt><dd data-field="recording-durable">—</dd></div>
+          <div><dt>Current ECG job</dt><dd data-field="recording-job-state">—</dd></div>
+          <div><dt>Job active time</dt><dd data-field="recording-job-time">—</dd></div>
+          <div><dt>Job ECG samples</dt><dd data-field="recording-job-samples">—</dd></div>
+          <div><dt>Job dropped batches</dt><dd data-field="recording-job-drops">—</dd></div>
+          <div><dt>Job artifact</dt><dd data-field="recording-job-artifact">—</dd></div>
+          <div><dt>Job durability</dt><dd data-field="recording-job-durable">—</dd></div>
           <div><dt>ECG writer</dt><dd data-field="writer-health">—</dd></div>
           <div><dt>Gaps</dt><dd data-field="gaps">—</dd></div>
           <div><dt>Start preflight</dt><dd data-field="preflight">—</dd></div>

@@ -164,6 +164,10 @@ class FakeSdk extends EventTarget implements VdoNinjaSdk {
     return network.open(this, uuid, label, options)
   }
 
+  async getPeerQuality(_uuid: string) {
+    return { relayed: false, rttMs: 17.6 }
+  }
+
   async disconnect(): Promise<void> {
     this.disconnected = true
   }
@@ -195,7 +199,14 @@ function makeStatus(revision = 7): CompanionStatus {
     recordingSamplesWritten: 1_300,
     recordingDroppedBatches: 0,
     recordingArtifactOpen: true,
-    recordingDurable: true,
+  recordingDurable: true,
+  recordingJobState: 'idle',
+  recordingJobRequestedDurationMs: null,
+  recordingJobActiveDurationMs: 0,
+  recordingJobSamplesWritten: 0,
+  recordingJobDroppedBatches: 0,
+  recordingJobArtifactComplete: false,
+  recordingJobDurable: true,
     polarPhase: 'streaming',
     polarReady: true,
     polarReadinessReason: 'Real 130 Hz ECG is stable and durable.',
@@ -277,8 +288,13 @@ describe('companion viewer BRSP controller', () => {
           peerConnected: true,
           controlProtocol: 'brsp/1',
           stateStale: false,
+          networkRoute: 'direct',
+          networkRttMs: 18,
         })
         expect(statuses.some(({ revision }) => revision === 7)).toBe(true)
+        expect(statuses.some(({ companionTargetRoute, companionTargetRttMs }) => (
+          companionTargetRoute === 'direct' && companionTargetRttMs === 18
+        ))).toBe(true)
       }, { timeout: 3_000 })
 
       const commandId = await viewer.sendCommand({ name: 'pause_media', args: {} })

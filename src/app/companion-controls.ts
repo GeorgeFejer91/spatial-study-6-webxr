@@ -11,7 +11,6 @@ import {
 } from '../companion/protocol.ts'
 import {
   deriveStudy6PublicBeaconIdentity,
-  deriveStudy6PublicPairingDescriptor,
   Study6PublicBeaconBroadcaster,
 } from '../companion/public-beacon.ts'
 import {
@@ -46,9 +45,10 @@ function usableTrustedDescriptor(value: PairingDescriptor | null): PairingDescri
 }
 
 /**
- * The WebXR page continuously hosts one public, data-only BRSP beacon. Any
- * companion visitor can derive its connection transcript key from the public
- * beacon handle; no dialog is opened and immersive presentation is untouched.
+ * The WebXR page continuously hosts one private, data-only BRSP target and a
+ * separate public availability beacon. The beacon contains no derivation path
+ * to the private bearer credential. A phone pairs once through the fragment
+ * link/QR and can then reconnect from its locally retained descriptor.
  */
 export class CompanionControls {
   private readonly options: CompanionControlsOptions
@@ -61,8 +61,8 @@ export class CompanionControls {
   private readonly stopButton: HTMLButtonElement
   private readonly rotateButton: HTMLButtonElement
   private host: CompanionHost | null = null
-  /** Random persisted seed; its key is never used for the public control plane. */
-  private beaconSeedDescriptor: PairingDescriptor
+  /** Random persisted bearer credential used only by the private BRSP target. */
+  private trustedDescriptor: PairingDescriptor
   private publicBeacon: Study6PublicBeaconBroadcaster | null = null
   private startInFlight: Promise<void> | null = null
   private retryTimer: number | undefined
@@ -76,34 +76,34 @@ export class CompanionControls {
     this.options = options
     const stored = usableTrustedDescriptor(loadTrustedPairing())
     if (!stored) forgetTrustedPairing()
-    this.beaconSeedDescriptor = stored ?? createPairingDescriptor(false, undefined, false)
-    const persisted = saveTrustedPairing(this.beaconSeedDescriptor)
+    this.trustedDescriptor = stored ?? createPairingDescriptor(false, undefined, false)
+    const persisted = saveTrustedPairing(this.trustedDescriptor)
 
     this.enableButton = button('Companion · starting')
-    this.enableButton.title = 'Show public full-operator beacon and connection status'
+    this.enableButton.title = 'Show trusted companion pairing and connection status'
     options.slot.append(this.enableButton)
 
     this.dialog = document.createElement('dialog')
     this.dialog.className = 'study6-companion-dialog'
     this.dialog.innerHTML = `
       <div class="study6-companion-dialog__heading">
-        <div><span>PUBLIC BROWSER BEACON</span><h2>Browser companion</h2></div>
+        <div><span>TRUSTED BROWSER PAIRING</span><h2>Browser companion</h2></div>
         <button type="button" data-close aria-label="Close">×</button>
       </div>
-      <p>The data-only BRSP host and public discovery beacon start automatically and remain available while WebXR is immersive. Visiting the public companion website discovers this headset and connects without another headset prompt.</p>
-      <p><strong>Full bounded operator access is enabled.</strong> This grants every defined Study 6 operator scope, but never arbitrary scripts, questionnaire answers, consent, raw ECG transfer, record deletion, or immersive-VR admission.</p>
+      <p>The private data-only BRSP host and a discovery-only public availability beacon start automatically and remain available while WebXR is immersive. The beacon cannot reveal or derive the private control credential.</p>
+      <p><strong>Full bounded operator access requires this trusted link.</strong> Pair a phone once by opening or scanning it; that browser can retain the credential for later automatic reconnects. The protocol never grants arbitrary scripts, questionnaire answers, consent, raw ECG transfer, record deletion, or immersive-VR admission.</p>
       <div class="study6-companion-dialog__actions" data-actions></div>
-      <p class="study6-companion-dialog__state" data-state role="status">Starting the public browser beacon…</p>
+      <p class="study6-companion-dialog__state" data-state role="status">Starting private companion control and public availability…</p>
       <div class="study6-companion-dialog__pair" data-pair hidden>
-        <img data-qr alt="Public full-operator companion QR code" />
+        <img data-qr alt="Private trusted-operator companion QR code" />
         <div>
-          <label for="study6-companion-link">Direct public operator link</label>
+          <label for="study6-companion-link">Private trusted-operator link</label>
           <textarea id="study6-companion-link" data-link readonly rows="5"></textarea>
           <button type="button" data-copy>Copy direct link</button>
           <p>${persisted
-            ? 'This public target identity is remembered on this headset browser until Rotate is selected.'
-            : 'Browser storage is unavailable; this public target identity lasts only for the current page.'}</p>
-          <p>This prototype intentionally permits any visitor to the public companion page to request the full bounded operator profile. Rotate to publish a new public target identity.</p>
+            ? 'This private target credential is remembered on this headset browser until Rotate is selected.'
+            : 'Browser storage is unavailable; this private credential lasts only for the current page.'}</p>
+          <p>Public discovery reveals only that an opaque Study 6 target is online. Rotate immediately revokes the old bearer credential and publishes a new unrelated availability handle.</p>
         </div>
       </div>
     `
@@ -115,7 +115,7 @@ export class CompanionControls {
     const actionSlot = this.dialog.querySelector<HTMLElement>('[data-actions]')!
     this.startButton = button('Resume automatic pairing', 'study6-companion-dialog__primary')
     this.stopButton = button('Pause automatic pairing')
-    this.rotateButton = button('Rotate public identity')
+    this.rotateButton = button('Rotate trusted credential')
     this.startButton.disabled = true
     actionSlot.append(this.startButton, this.stopButton, this.rotateButton)
 
@@ -183,7 +183,7 @@ export class CompanionControls {
     this.stopButton.disabled = true
     this.rotateButton.disabled = true
     this.enableButton.textContent = 'Companion · rotating'
-    this.state.textContent = 'The old public target identity is removed. Closing its connection…'
+    this.state.textContent = 'Revoking the old trusted credential and closing its connection…'
     this.link.value = ''
     this.qr.removeAttribute('src')
     this.dialog.querySelector<HTMLElement>('[data-pair]')!.hidden = true
@@ -197,12 +197,12 @@ export class CompanionControls {
       pending?.catch(() => undefined),
     ])
     if (this.destroyed) return
-    this.beaconSeedDescriptor = createPairingDescriptor(false, undefined, false)
-    saveTrustedPairing(this.beaconSeedDescriptor)
+    this.trustedDescriptor = createPairingDescriptor(false, undefined, false)
+    saveTrustedPairing(this.trustedDescriptor)
     this.operatorStopped = false
     this.stopping = false
     this.options.onControlEnabledChange?.(true)
-    this.state.textContent = 'Starting the replacement public target identity…'
+    this.state.textContent = 'Starting the replacement trusted companion target…'
     void this.start()
   }
 
@@ -223,13 +223,12 @@ export class CompanionControls {
     this.startButton.disabled = true
     this.stopButton.disabled = false
     this.rotateButton.disabled = true
-    this.state.textContent = 'Starting the public full-operator browser beacon…'
+    this.state.textContent = 'Starting private companion control and public availability…'
     this.enableButton.textContent = 'Companion · starting'
     try {
       const identity = await deriveStudy6PublicBeaconIdentity(
-        this.beaconSeedDescriptor.streamId,
+        this.trustedDescriptor.streamId,
       )
-      const publicDescriptor = await deriveStudy6PublicPairingDescriptor(identity.hint)
       if (
         generation !== this.lifecycleGeneration
         || this.operatorStopped
@@ -243,13 +242,13 @@ export class CompanionControls {
       const snapshot = await host.start(
         this.options.canvas,
         false,
-        publicDescriptor,
+        this.trustedDescriptor,
       )
       if (generation !== this.lifecycleGeneration || this.operatorStopped || this.destroyed) {
         await host.stop()
         return
       }
-      if (!snapshot.pairingUrl) throw new Error('The public companion link was not created.')
+      if (!snapshot.pairingUrl) throw new Error('The private companion link was not created.')
       const publicBeacon = new Study6PublicBeaconBroadcaster(identity)
       this.publicBeacon = publicBeacon
       await publicBeacon.start()
@@ -283,7 +282,7 @@ export class CompanionControls {
       this.qr.src = qrDataUrl
       this.dialog.querySelector<HTMLElement>('[data-pair]')!.hidden = false
       this.retryAttempt = 0
-      this.state.textContent = 'Public discovery and full bounded browser control are online.'
+      this.state.textContent = 'Public availability and private bounded browser control are online.'
     } catch (error) {
       if (generation !== this.lifecycleGeneration || this.operatorStopped || this.destroyed) return
       const publicBeacon = this.publicBeacon
@@ -302,7 +301,7 @@ export class CompanionControls {
     const index = Math.min(this.retryAttempt, HOST_RETRY_DELAYS_MS.length - 1)
     const delay = HOST_RETRY_DELAYS_MS[index]
     this.retryAttempt += 1
-    this.state.textContent = `Public browser beacon unavailable; retrying automatically in ${Math.round(delay / 1_000)} s.`
+    this.state.textContent = `Trusted companion service unavailable; retrying automatically in ${Math.round(delay / 1_000)} s.`
     this.enableButton.textContent = 'Companion · retrying'
     this.startButton.disabled = false
     this.retryTimer = window.setTimeout(() => {
@@ -353,6 +352,14 @@ export class CompanionControls {
         || snapshot.phase === 'broadcasting'
       this.stopButton.disabled = snapshot.phase === 'idle' && this.retryTimer === undefined
       if (snapshot.phase === 'broadcasting') this.retryAttempt = 0
+      if (
+        snapshot.phase === 'error'
+        && !this.operatorStopped
+        && !this.stopping
+        && !this.destroyed
+      ) {
+        this.scheduleRetry()
+      }
     })
     this.host = host
     return host
@@ -362,7 +369,7 @@ export class CompanionControls {
     if (!this.link.value) return
     try {
       await navigator.clipboard.writeText(this.link.value)
-      this.state.textContent = 'Direct public operator link copied.'
+      this.state.textContent = 'Private trusted-operator link copied.'
     } catch {
       this.link.focus()
       this.link.select()

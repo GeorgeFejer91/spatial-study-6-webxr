@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   deriveStudy6PublicBeaconIdentity,
-  deriveStudy6PublicPairingDescriptor,
   STUDY6_PUBLIC_BEACON_MAX_TARGETS,
   STUDY6_PUBLIC_BEACON_ROOM,
   Study6PublicBeaconBroadcaster,
@@ -87,26 +86,9 @@ describe('Study 6 public discovery beacon', () => {
     )
   })
 
-  it('derives the exact full data-only descriptor from the public hint with no secret input', async () => {
-    const hint = '0123456789abcdef01234567'
-    const expected = {
-      version: 2,
-      controlProtocol: 'brsp/1',
-      room: 's6pub_room_bbcb874db6e2be6afa758439b132cd6d',
-      streamId: 's6pub_target_edec69392d83593ca36c826f978b26c7',
-      key: 'a_k_l6Lx5GjAVrYIka-HGE8A--dwiav7FEs5AJloImw',
-      forceTurn: false,
-      spectatorMedia: false,
-    }
-
-    await expect(deriveStudy6PublicPairingDescriptor(hint)).resolves.toEqual(expected)
-    await expect(deriveStudy6PublicPairingDescriptor(hint)).resolves.toEqual(expected)
-    await expect(deriveStudy6PublicPairingDescriptor('not-public')).rejects.toThrow(
-      'Invalid Study 6 beacon hint',
-    )
-    expect(expected.room).not.toContain(hint)
-    expect(expected.streamId).not.toContain(hint)
-    expect(expected.key).toHaveLength(43)
+  it('has no public-hint to control-credential derivation API', async () => {
+    const module = await import('./public-beacon.ts')
+    expect(module).not.toHaveProperty('deriveStudy6PublicPairingDescriptor')
   })
 
   it('is inert until start and publishes one passwordless data-only announcement', async () => {
@@ -194,14 +176,6 @@ describe('Study 6 public discovery beacon', () => {
     expect(sdk.calls.some(({ name }) => ['publish', 'announce', 'view', 'sendData', 'openChannel'].includes(name)))
       .toBe(false)
 
-    const descriptor = await deriveStudy6PublicPairingDescriptor(snapshot.targets[0]?.hint ?? '')
-    expect(descriptor).toMatchObject({
-      version: 2,
-      controlProtocol: 'brsp/1',
-      forceTurn: false,
-      spectatorMedia: false,
-    })
-    expect(descriptor).not.toHaveProperty('relay')
   })
 
   it('bounds listings, reconciles departures, and clears stale discovery state across reconnect', async () => {

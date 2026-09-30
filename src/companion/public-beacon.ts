@@ -3,10 +3,6 @@ import {
   loadVdoNinjaSdk,
   type VdoNinjaSdk,
 } from './vdo-sdk.ts'
-import {
-  PairingDescriptorSchema,
-  type PairingDescriptor,
-} from './protocol.ts'
 
 /**
  * Public, passwordless VDO room used only to discover online Study 6 targets.
@@ -18,7 +14,6 @@ export const STUDY6_PUBLIC_BEACON_MAX_TARGETS = 32
 export const STUDY6_PUBLIC_BEACON_MAX_LISTING_ITEMS = 128
 
 const STUDY6_PUBLIC_BEACON_SALT = 'spatial-study-6-public-beacon-v1'
-const STUDY6_PUBLIC_PAIRING_DOMAIN = 'spatial-study-6-public-pairing-v1'
 const SOURCE_HINT_PATTERN = /^[A-Za-z0-9_-]{8,128}$/u
 const BEACON_STREAM_PATTERN = /^s6_beacon_([0-9a-f]{24})$/u
 const PEER_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u
@@ -77,12 +72,6 @@ function bytesToHex(bytes: Uint8Array): string {
   return result
 }
 
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '')
-}
-
 function genericLabel(hint: string): string {
   return `Study 6 WebXR ${hint.slice(0, 8).toUpperCase()}`
 }
@@ -113,41 +102,6 @@ export async function deriveStudy6PublicBeaconIdentity(
 export function study6PublicBeaconStreamId(hint: string): string {
   if (!/^[0-9a-f]{24}$/u.test(hint)) throw new TypeError('Invalid Study 6 beacon hint.')
   return `${STUDY6_PUBLIC_BEACON_STREAM_PREFIX}${hint}`
-}
-
-async function publicPairingDigest(purpose: 'brsp-key' | 'vdo-room' | 'vdo-stream', hint: string) {
-  study6PublicBeaconStreamId(hint)
-  const input = `${STUDY6_PUBLIC_PAIRING_DOMAIN}\0${purpose}\0${hint}`
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input)))
-}
-
-/**
- * Derive the complete data-only BRSP/VDO descriptor from a public beacon hint.
- *
- * This is an intentionally open-control prototype: the returned `key` is
- * reproducible by every visitor and therefore authenticates only the derived
- * session transcript, not a trusted person or device. No hidden input exists.
- * The target must use this exact descriptor when starting `CompanionHost`, and
- * it must still expose only the existing bounded Study 6 semantic command
- * profile; this function does not create or widen any command capability.
- */
-export async function deriveStudy6PublicPairingDescriptor(
-  hint: string,
-): Promise<PairingDescriptor> {
-  const [keyDigest, roomDigest, streamDigest] = await Promise.all([
-    publicPairingDigest('brsp-key', hint),
-    publicPairingDigest('vdo-room', hint),
-    publicPairingDigest('vdo-stream', hint),
-  ])
-  return PairingDescriptorSchema.parse({
-    version: 2,
-    controlProtocol: 'brsp/1',
-    room: `s6pub_room_${bytesToHex(roomDigest).slice(0, 32)}`,
-    streamId: `s6pub_target_${bytesToHex(streamDigest).slice(0, 32)}`,
-    key: bytesToBase64Url(keyDigest),
-    forceTurn: false,
-    spectatorMedia: false,
-  })
 }
 
 function targetFromStreamId(value: unknown): Study6PublicBeaconTarget | undefined {
@@ -333,9 +287,10 @@ export class Study6PublicBeaconBroadcaster extends EventTarget {
 }
 
 /**
- * Lists public Study 6 targets without viewing them. It never creates a peer
- * connection or receives application data; private BRSP pairing remains a
- * separate authenticated plane.
+ * Lists public Study 6 targets without viewing them. A beacon is availability
+ * information only: it cannot be converted into a BRSP room, stream or key.
+ * It never creates a peer connection or receives application data; private
+ * BRSP pairing remains a separate bearer-credential plane.
  */
 export class Study6PublicBeaconReceiver extends EventTarget {
   private readonly sdkFactory: Study6PublicBeaconSdkFactory

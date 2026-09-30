@@ -17,6 +17,8 @@ interface HostSnapshot {
   message: string
   controlProtocol: 'brsp/1'
   acceptedScopes: string[]
+  networkRoute: 'direct' | 'relay' | 'unknown'
+  networkRttMs: number | null
 }
 
 interface StartCall {
@@ -97,7 +99,6 @@ vi.mock('../companion/host.ts', () => {
 
 const publicHarness = vi.hoisted(() => ({
   identities: [] as PublicIdentity[],
-  descriptorHints: [] as string[],
   startCalls: [] as PublicIdentity[],
   stopCalls: 0,
 }))
@@ -127,10 +128,6 @@ vi.mock('../companion/public-beacon.ts', () => {
     deriveStudy6PublicBeaconIdentity: vi.fn(async (sourceHint: string) => (
       mockPublicIdentity(sourceHint)
     )),
-    deriveStudy6PublicPairingDescriptor: vi.fn(async (hint: string) => {
-      publicHarness.descriptorHints.push(hint)
-      return mockPublicDescriptor(hint)
-    }),
     Study6PublicBeaconBroadcaster,
   }
 })
@@ -159,6 +156,8 @@ function broadcastingSnapshot(descriptor: PairingDescriptor): HostSnapshot {
     message: 'Pairing is ready; waiting for one authenticated BRSP controller.',
     controlProtocol: 'brsp/1',
     acceptedScopes: [],
+    networkRoute: 'unknown',
+    networkRttMs: null,
   }
 }
 
@@ -168,19 +167,6 @@ function mockPublicIdentity(sourceHint: string): PublicIdentity {
     hint,
     label: `Study 6 WebXR ${hint.slice(0, 8).toUpperCase()}`,
     announcementStreamId: `s6_beacon_${hint}`,
-  }
-}
-
-function mockPublicDescriptor(hint: string): PairingDescriptor {
-  const expanded = `${hint}${hint}`
-  return {
-    version: 2,
-    controlProtocol: 'brsp/1',
-    room: `s6pub_room_${expanded.slice(0, 32)}`,
-    streamId: `s6pub_target_${expanded.slice(4, 36)}`,
-    key: expanded.slice(0, 43),
-    forceTurn: false,
-    spectatorMedia: false,
   }
 }
 
@@ -255,7 +241,6 @@ beforeEach(() => {
   qrHarness.values.length = 0
   qrHarness.behaviors.length = 0
   publicHarness.identities.length = 0
-  publicHarness.descriptorHints.length = 0
   publicHarness.startCalls.length = 0
   publicHarness.stopCalls = 0
   localStorage.clear()
@@ -272,7 +257,7 @@ afterEach(async () => {
   document.body.replaceChildren()
 })
 
-describe('zero-interruption public companion target', () => {
+describe('zero-interruption private companion target', () => {
   it('enables full control before automatically starting the host without opening the dialog', async () => {
     const { dialog, enabled } = createControls()
 
@@ -289,16 +274,15 @@ describe('zero-interruption public companion target', () => {
     expect(dialog.hasAttribute('open')).toBe(false)
   })
 
-  it('reuses the stored target seed and exact derived public descriptor on resume', async () => {
+  it('reuses the exact stored private descriptor on resume', async () => {
     const seed = createPairingDescriptor(true, undefined, false)
     expect(saveTrustedPairing(seed)).toBe(true)
     const { dialog } = createControls()
 
     await vi.waitFor(() => expect(hostHarness.starts).toHaveLength(1))
-    const expectedPublic = mockPublicDescriptor(mockPublicIdentity(seed.streamId).hint)
     expect(hostHarness.starts[0]).toMatchObject({
       forceTurn: false,
-      descriptor: expectedPublic,
+      descriptor: seed,
     })
     expect(publicHarness.startCalls).toHaveLength(1)
     expect(hostHarness.events.indexOf('public:start')).toBeGreaterThan(
@@ -312,24 +296,24 @@ describe('zero-interruption public companion target', () => {
     actionButton(dialog, 'Resume automatic pairing').click()
     await vi.waitFor(() => expect(hostHarness.starts).toHaveLength(2))
 
-    expect(hostHarness.starts[1]?.descriptor).toEqual(expectedPublic)
+    expect(hostHarness.starts[1]?.descriptor).toEqual(seed)
     expect(loadTrustedPairing()).toEqual(seed)
     expect(publicHarness.startCalls).toHaveLength(2)
   })
 
-  it('keeps the public link and stored identity seed while Pause stops both planes', async () => {
+  it('keeps the private link and stored credential while Pause stops both planes', async () => {
     const { dialog, enabled } = createControls()
     await vi.waitFor(() => expect(hostHarness.starts).toHaveLength(1))
-    const publicDescriptor = hostHarness.starts[0]!.descriptor
+    const privateDescriptor = hostHarness.starts[0]!.descriptor
     const seed = loadTrustedPairing()
     const link = dialog.querySelector<HTMLTextAreaElement>('[data-link]')!
-    await vi.waitFor(() => expect(link.value).toContain(publicDescriptor.key))
+    await vi.waitFor(() => expect(link.value).toContain(privateDescriptor.key))
 
     const stopping = deferred<void>()
     hostHarness.stopBehaviors.push(() => stopping.promise)
     actionButton(dialog, 'Pause automatic pairing').click()
 
-    expect(link.value).toContain(publicDescriptor.key)
+    expect(link.value).toContain(privateDescriptor.key)
     expect(loadTrustedPairing()).toEqual(seed)
     expect(enabled.at(-1)).toBe(false)
     expect(publicHarness.stopCalls).toBeGreaterThanOrEqual(1)
@@ -366,6 +350,8 @@ describe('zero-interruption public companion target', () => {
       message: 'BRSP mutual proof verified.',
       controlProtocol: 'brsp/1',
       acceptedScopes: ['study.experiment.control'],
+      networkRoute: 'direct',
+      networkRttMs: 18,
     }
 
     host.emit(incoming)
@@ -418,7 +404,7 @@ describe('zero-interruption public companion target', () => {
     expect(enabled.at(-1)).toBe(true)
   })
 
-  it('clears the old public link and seed before Rotate waits for signaling shutdown', async () => {
+  it('clears the old private link and credential before Rotate waits for signaling shutdown', async () => {
     const { dialog } = createControls()
     await vi.waitFor(() => expect(hostHarness.starts).toHaveLength(1))
     const oldDescriptor = hostHarness.starts[0]!.descriptor
@@ -432,7 +418,7 @@ describe('zero-interruption public companion target', () => {
 
     const stopping = deferred<void>()
     hostHarness.stopBehaviors.push(() => stopping.promise)
-    actionButton(dialog, 'Rotate public identity').click()
+    actionButton(dialog, 'Rotate trusted credential').click()
 
     expect(link.value).toBe('')
     expect(qr.hasAttribute('src')).toBe(false)
@@ -448,9 +434,11 @@ describe('zero-interruption public companion target', () => {
     const replacementSeed = loadTrustedPairing()
     expect(replacementSeed).not.toBeNull()
     expect(replacementSeed).not.toEqual(oldSeed)
-    expect(replacement).toEqual(mockPublicDescriptor(
-      mockPublicIdentity(replacementSeed!.streamId).hint,
-    ))
+    expect(replacement).toEqual(replacementSeed)
+    const publicIdentity = publicHarness.identities.at(-1)
+    expect(publicIdentity).toBeDefined()
+    expect(JSON.stringify(publicIdentity)).not.toContain(replacement.key)
+    expect(JSON.stringify(publicIdentity)).not.toContain(replacement.room)
   })
 
   it('fences an old async start so it cannot publish its link after rotation', async () => {
@@ -521,7 +509,7 @@ describe('zero-interruption public companion target', () => {
     await vi.waitFor(() => expect(hostHarness.starts).toHaveLength(1))
     const firstKey = hostHarness.starts[0]!.descriptor.key
     const firstSeedKey = loadTrustedPairing()!.key
-    actionButton(dialog, 'Rotate public identity').click()
+    actionButton(dialog, 'Rotate trusted credential').click()
     await vi.waitFor(() => expect(hostHarness.starts).toHaveLength(2))
     const secondKey = hostHarness.starts[1]!.descriptor.key
     const secondSeedKey = loadTrustedPairing()!.key

@@ -135,6 +135,7 @@ class FakeVdoSdk extends EventTarget implements VdoNinjaSdk {
   readonly peerId: string
   readonly options: Record<string, unknown>
   publishedStreamId: string | undefined
+  announceCalls = 0
   disconnectPromise: Promise<void> = Promise.resolve()
 
   constructor(options: Record<string, unknown> = {}) {
@@ -149,6 +150,7 @@ class FakeVdoSdk extends EventTarget implements VdoNinjaSdk {
   async joinRoom(_options: { room: string; password?: string | false }): Promise<void> {}
 
   async announce(options: { streamID: string; label: string }): Promise<string> {
+    this.announceCalls += 1
     this.publishedStreamId = options.streamID
     network.publish(this, null, options.streamID)
     return options.streamID
@@ -221,7 +223,14 @@ function makeStatus(revision: number, recordingRevision = 12): CompanionStatus {
     recordingSamplesWritten: 1_300,
     recordingDroppedBatches: 0,
     recordingArtifactOpen: true,
-    recordingDurable: true,
+  recordingDurable: true,
+  recordingJobState: 'idle',
+  recordingJobRequestedDurationMs: null,
+  recordingJobActiveDurationMs: 0,
+  recordingJobSamplesWritten: 0,
+  recordingJobDroppedBatches: 0,
+  recordingJobArtifactComplete: false,
+  recordingJobDurable: true,
     polarPhase: 'streaming',
     polarReady: true,
     polarReadinessReason: 'Real 130 Hz ECG is stable and durable.',
@@ -401,6 +410,7 @@ describe('companion host BRSP target', () => {
         })
         expect(host.snapshot().message).toContain('pairing is rearmed')
       }, { timeout: 3_000 })
+      expect(FakeVdoSdk.instances[0]?.announceCalls).toBe(2)
       await wrongKeyViewer.stop()
 
       const statuses: CompanionStatus[] = []

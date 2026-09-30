@@ -54,6 +54,7 @@ interface OpenCall {
 class FakeSdk extends EventTarget {
   readonly openCalls: OpenCall[] = []
   readonly channels = new Map<string, FakeChannel>()
+  readonly qualityCalls: string[] = []
 
   async openChannel(
     peerKey: string,
@@ -64,6 +65,11 @@ class FakeSdk extends EventTarget {
     const channel = new FakeChannel(label, options)
     this.channels.set(label, channel)
     return channel as unknown as RTCDataChannel
+  }
+
+  async getPeerQuality(peerKey: string) {
+    this.qualityCalls.push(peerKey)
+    return { relayed: false, rttMs: 17.6 }
   }
 
   emit(type: string, detail: unknown): void {
@@ -150,6 +156,11 @@ describe('Study 6 same-peer BRSP VDO transport', () => {
       ordered: true,
     })
     await expect(opened).resolves.toEqual({ peerKey: 'target-peer' })
+    await expect(transport.getPeerQuality()).resolves.toEqual({
+      relayed: false,
+      rttMs: 17.6,
+    })
+    expect(sdk.qualityCalls).toEqual(['target-peer'])
 
     const controlMessage = once<{ peerKey: string; data: string }>(transport, 'controlmessage')
     control.receive('control')
@@ -164,6 +175,7 @@ describe('Study 6 same-peer BRSP VDO transport', () => {
     state.receive('x'.repeat(BRSP_STATE_MAX_BYTES + 1))
     expect(listener).not.toHaveBeenCalled()
     transport.stop()
+    await expect(transport.getPeerQuality()).resolves.toBeNull()
   })
 
   it('bounds reliable backlog and retains only the newest state under backpressure', async () => {

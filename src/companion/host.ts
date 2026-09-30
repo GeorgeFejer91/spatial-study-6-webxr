@@ -23,6 +23,10 @@ import {
 } from './vendor/browser-remote-sync-protocol/brsp.js'
 import { Study6BrspConnection } from './brsp-connection.ts'
 import {
+  sanitizePeerQuality,
+  type CompanionNetworkRoute,
+} from './network-quality.ts'
+import {
   createVdoSdk,
   loadVdoNinjaSdk,
   type VdoNinjaSdk,
@@ -58,7 +62,11 @@ export interface CompanionHostSnapshot {
   message: string
   controlProtocol: 'brsp/1'
   acceptedScopes: string[]
+  networkRoute: CompanionNetworkRoute
+  networkRttMs: number | null
 }
+
+const QUALITY_POLL_INTERVAL_MS = 2_000
 
 function detailEvent<T>(type: string, detail: T): CustomEvent<T> {
   return new CustomEvent(type, { detail })
@@ -85,6 +93,9 @@ export class CompanionHost extends EventTarget {
   private message = ''
   private statusTimer: number | undefined
   private authenticationTimer: number | undefined
+  private qualityTimer: number | undefined
+  private networkRoute: CompanionHostSnapshot['networkRoute'] = 'unknown'
+  private networkRttMs: number | null = null
   private lastProcessedCommandId: string | null = null
   private lifecycleGeneration = 0
 
@@ -102,6 +113,8 @@ export class CompanionHost extends EventTarget {
       message: this.message,
       controlProtocol: 'brsp/1',
       acceptedScopes: brsp?.acceptedScopes ?? [],
+      networkRoute: this.networkRoute,
+      networkRttMs: this.networkRttMs,
     }
   }
 
@@ -169,6 +182,7 @@ export class CompanionHost extends EventTarget {
       this.phase = 'broadcasting'
       this.message = 'Pairing is ready; waiting for one authenticated BRSP controller.'
       this.statusTimer = window.setInterval(() => this.broadcastStatus(), 1_000)
+      this.startQualityMonitor(transport)
       this.emitState()
       return this.snapshot()
     } catch (error) {
@@ -236,6 +250,7 @@ export class CompanionHost extends EventTarget {
       this.emitState()
     })
     connection.addEventListener('ready', () => {
+      void this.refreshNetworkQuality(transport)
       this.broadcastStatus()
       this.emitState()
     })
@@ -279,7 +294,30 @@ export class CompanionHost extends EventTarget {
     })
     this.transport = transport
     transport.start()
-    this.brsp = this.createTargetConnection(transport, descriptor)
+    const rearmedConnection = this.createTargetConnection(transport, descriptor)
+    this.brsp = rearmedConnection
+    if (!descriptor.spectatorMedia) {
+      try {
+        await sdk.announce({
+          streamID: descriptor.streamId,
+          label: 'Spatial Study 6 data-only BRSP target',
+        })
+      } catch (error) {
+        if (this.brsp === rearmedConnection && this.descriptor === descriptor) {
+          this.phase = 'error'
+          this.message = error instanceof Error ? error.message : String(error)
+          this.emitState()
+        }
+        return
+      }
+    }
+    if (
+      this.brsp !== rearmedConnection
+      || this.transport !== transport
+      || this.sdk !== sdk
+      || this.descriptor !== descriptor
+    ) return
+    this.startQualityMonitor(transport)
     this.message = message
     this.emitState()
   }
@@ -370,6 +408,7 @@ export class CompanionHost extends EventTarget {
 
   private async disconnect(): Promise<void> {
     this.clearAuthenticationTimer()
+    this.clearQualityMonitor()
     if (this.statusTimer !== undefined) window.clearInterval(this.statusTimer)
     this.statusTimer = undefined
     const brsp = this.brsp
@@ -387,6 +426,8 @@ export class CompanionHost extends EventTarget {
       ? Promise.resolve(sdk.disconnect()).catch(() => undefined)
       : undefined
     await Promise.all([closeBrsp, disconnectSdk])
+    this.networkRoute = 'unknown'
+    this.networkRttMs = null
   }
 
   private startAuthenticationTimer(connection: Study6BrspConnection<JsonValue>): void {
@@ -410,8 +451,36 @@ export class CompanionHost extends EventTarget {
   private authoritativeStatus(): CompanionStatus {
     return study6BrspState({
       ...this.options.getStatus(),
+      companionTargetRoute: this.networkRoute,
+      companionTargetRttMs: this.networkRttMs,
       remoteCommandReceiptId: this.lastProcessedCommandId,
     })
+  }
+
+  private startQualityMonitor(transport: Study6BrspVdoPeerTransport): void {
+    this.clearQualityMonitor()
+    void this.refreshNetworkQuality(transport)
+    this.qualityTimer = window.setInterval(() => {
+      void this.refreshNetworkQuality(transport)
+    }, QUALITY_POLL_INTERVAL_MS)
+  }
+
+  private clearQualityMonitor(): void {
+    if (this.qualityTimer !== undefined) window.clearInterval(this.qualityTimer)
+    this.qualityTimer = undefined
+  }
+
+  private async refreshNetworkQuality(
+    transport: Study6BrspVdoPeerTransport,
+  ): Promise<void> {
+    const quality = await transport.getPeerQuality()
+    if (this.transport !== transport || !quality) return
+    const { route, rttMs } = sanitizePeerQuality(quality)
+    if (route === this.networkRoute && rttMs === this.networkRttMs) return
+    this.networkRoute = route
+    this.networkRttMs = rttMs
+    this.emitState()
+    this.broadcastStatus()
   }
 
   private pairingUrl(descriptor: PairingDescriptor): URL {

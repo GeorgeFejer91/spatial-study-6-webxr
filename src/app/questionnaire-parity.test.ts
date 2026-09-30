@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Object3D } from 'three'
 
-import type { PolarStatusProjection } from '../bridge/index.ts'
+import { disconnectedPolarStatus, type PolarStatusProjection } from '../bridge/index.ts'
 import {
   createInitialExperimentState,
   emptyAssessmentDraft,
@@ -492,6 +492,7 @@ describe('questionnaire page composition and gating', () => {
       ready: true,
       readinessReason: 'ready',
       heartRateBpm: 64,
+      rrIntervalMs: 938,
       rrIntervalCount: 12,
       ecgSampleRateHz: 130,
       ecgSampleCount: 3_900,
@@ -517,7 +518,58 @@ describe('questionnaire page composition and gating', () => {
     const status = named(panel.body, 'study6-demographics-polar-status')
     expect(property(status, 'backgroundColor')).toBe(STUDY_UI_COLORS.successSoft)
     expect(named(panel.body, 'study6-polar-waveform-real').children).toHaveLength(8)
-    expect(panel.body.getObjectByName('study6-polar-waveform-empty')).toBeUndefined()
+    expect(property(named(panel.body, 'study6-polar-waveform-empty'), 'display')).toBe('none')
+  })
+
+  it('keeps the questionnaire tree and spatial keyboard stable across live ECG updates', () => {
+    const panel = new SpatialStudyPanel()
+    panels.push(panel)
+    const renderer = new StudyPanelRenderer(panel, actions())
+    const state = questionnaireState('demographics')
+    const context = {
+      participantProgress: [],
+      localMessage: '',
+      storageHealthy: true,
+      recordingSessionReady: false,
+      polar: disconnectedPolarStatus(),
+    }
+
+    renderer.render(state, context)
+    const bodyPage = panel.body.children[0]
+    const firstName = named(panel.body, 'study6-demographics-first-name')
+    const click = property(firstName, 'onClick') as (() => void) | undefined
+    expect(click).toBeTypeOf('function')
+    click?.()
+
+    expect(named(panel.overlay, 'study6-spatial-keyboard')).toBeDefined()
+    expect(document.querySelectorAll('input, textarea')).toHaveLength(0)
+
+    const readyPolar: PolarStatusProjection = {
+      ...context.polar,
+      phase: 'streaming',
+      ready: true,
+      readinessReason: 'ready',
+      heartRateBpm: 62,
+      ecgSampleRateHz: 130,
+      ecgSampleCount: 13_000,
+      lastSampleAgeMs: 12,
+      stableDurationMs: 4_000,
+      previewKind: 'real_samples',
+      waveformMicrovolts: [-12, 4, 90, -30],
+      writer: { ...context.polar.writer, phase: 'recording', healthy: true },
+    }
+    renderer.render(state, {
+      ...context,
+      polar: readyPolar,
+      recordingSessionReady: true,
+    })
+
+    expect(panel.body.children[0]).toBe(bodyPage)
+    expect(named(panel.overlay, 'study6-spatial-keyboard')).toBeDefined()
+    expect(
+      property(named(panel.body, 'study6-demographics-polar-status'), 'backgroundColor'),
+    ).toBe(STUDY_UI_COLORS.successSoft)
+    expect(document.querySelectorAll('input, textarea')).toHaveLength(0)
   })
 
   it('keeps SAM navigation in the footer with no Back button', () => {

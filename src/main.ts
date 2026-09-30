@@ -36,6 +36,7 @@ const media = new StudyMediaPlayer({
   onEnded: (snapshot) => controller?.onMediaEnded(snapshot),
   onError: (snapshot) => controller?.onMediaError(snapshot),
   onToggleRequest: (snapshot) => controller?.onMediaToggleRequest(snapshot),
+  onEffect: (receipt) => controller?.onMediaEffect(receipt),
 })
 const sceneRoot = new StudySceneRoot(panel, media)
 runtime = createStudyXRRuntime({

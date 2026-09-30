@@ -92,6 +92,7 @@
     "identity": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
     "sessionIdentity": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,96}$" },
     "launchIdentity": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,96}$" },
+    "artifactStem": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" },
     "apkHelloPayload": {
       "type": "object", "additionalProperties": false,
       "required": ["schemaRevision", "buildId", "capabilities", "authority"],
@@ -119,11 +120,12 @@
     },
     "polarStatusPayload": {
       "type": "object", "additionalProperties": false,
-      "required": ["phase", "ready", "readinessReason", "heartRateBpm", "rrIntervalCount", "ecgSampleRateHz", "ecgSampleCount", "lastSampleAgeMs", "stableDurationMs", "previewKind", "waveformMicrovolts", "writer", "reconnectCount", "gapCount"],
+      "required": ["phase", "ready", "readinessReason", "heartRateBpm", "rrIntervalMs", "rrIntervalCount", "ecgSampleRateHz", "ecgSampleCount", "lastSampleAgeMs", "stableDurationMs", "previewKind", "waveformMicrovolts", "writer", "reconnectCount", "gapCount"],
       "properties": {
         "phase": { "enum": ["unavailable", "permission_required", "scanning", "detected", "connecting", "connected", "streaming", "fault"] },
         "ready": { "type": "boolean" }, "readinessReason": { "type": "string", "maxLength": 256 },
         "heartRateBpm": { "type": ["integer", "null"], "minimum": 20, "maximum": 260 },
+        "rrIntervalMs": { "type": ["integer", "null"], "minimum": 1, "maximum": 4000 },
         "rrIntervalCount": { "type": "integer", "minimum": 0 },
         "ecgSampleRateHz": { "type": ["integer", "null"], "minimum": 1, "maximum": 2000 },
         "ecgSampleCount": { "type": "integer", "minimum": 0 },
@@ -140,15 +142,31 @@
       "properties": {
         "recording": {
           "type": "object", "additionalProperties": false,
-          "required": ["recordingEpoch", "ownerSessionId", "state", "revision", "markerCount", "samplesWritten", "droppedBatches", "artifactOpen", "durable"],
+          "required": ["recordingEpoch", "ownerSessionId", "state", "revision", "markerCount", "samplesWritten", "droppedBatches", "artifactOpen", "durable", "job"],
           "properties": {
             "recordingEpoch": { "$ref": "#/$defs/identity" }, "ownerSessionId": { "oneOf": [{ "$ref": "#/$defs/sessionIdentity" }, { "type": "null" }] },
             "state": { "enum": ["recording", "finalized", "fault"] }, "revision": { "type": "integer", "minimum": 0 },
             "markerCount": { "type": "integer", "minimum": 0 }, "samplesWritten": { "type": "integer", "minimum": 0 },
-            "droppedBatches": { "type": "integer", "minimum": 0 }, "artifactOpen": { "type": "boolean" }, "durable": { "type": "boolean" }
+            "droppedBatches": { "type": "integer", "minimum": 0 }, "artifactOpen": { "type": "boolean" }, "durable": { "type": "boolean" },
+            "job": { "$ref": "#/$defs/recordingJobPayload" }
           }
         },
         "polar": { "$ref": "#/$defs/polarStatusPayload" }
+      }
+    },
+    "recordingJobPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "jobId", "artifactStem", "requestedDurationMs", "activeDurationMs", "samplesWritten", "droppedBatches", "artifactComplete", "durable"],
+      "properties": {
+        "state": { "enum": ["idle", "recording", "paused", "stopping", "completed", "fault"] },
+        "jobId": { "oneOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }] },
+        "artifactStem": { "oneOf": [{ "$ref": "#/$defs/artifactStem" }, { "type": "null" }] },
+        "requestedDurationMs": { "type": ["integer", "null"], "minimum": 100, "maximum": 86400000 },
+        "activeDurationMs": { "type": "integer", "minimum": 0 },
+        "samplesWritten": { "type": "integer", "minimum": 0 },
+        "droppedBatches": { "type": "integer", "minimum": 0 },
+        "artifactComplete": { "type": "boolean" },
+        "durable": { "type": "boolean" }
       }
     },
     "commandPayload": {
@@ -159,6 +177,43 @@
           "properties": {
             "action": { "const": "begin_recording" }, "sessionId": { "$ref": "#/$defs/sessionIdentity" },
             "webxrRevision": { "type": "integer", "minimum": 0 }, "recordingRequestId": { "$ref": "#/$defs/identity" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["action", "sessionId", "webxrRevision", "jobId", "artifactStem"],
+          "properties": {
+            "action": { "const": "start_recording_job" }, "sessionId": { "$ref": "#/$defs/sessionIdentity" },
+            "webxrRevision": { "type": "integer", "minimum": 0 }, "jobId": { "$ref": "#/$defs/identity" },
+            "artifactStem": { "$ref": "#/$defs/artifactStem" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["action", "sessionId", "webxrRevision", "jobId", "artifactStem", "durationMs"],
+          "properties": {
+            "action": { "const": "record_for" }, "sessionId": { "$ref": "#/$defs/sessionIdentity" },
+            "webxrRevision": { "type": "integer", "minimum": 0 }, "jobId": { "$ref": "#/$defs/identity" },
+            "artifactStem": { "$ref": "#/$defs/artifactStem" },
+            "durationMs": { "type": "integer", "minimum": 100, "maximum": 86400000 }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["action", "sessionId", "webxrRevision", "jobId"],
+          "properties": {
+            "action": { "enum": ["pause_recording_job", "resume_recording_job", "stop_recording_job"] },
+            "sessionId": { "$ref": "#/$defs/sessionIdentity" }, "webxrRevision": { "type": "integer", "minimum": 0 },
+            "jobId": { "$ref": "#/$defs/identity" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["action", "sessionId", "webxrRevision", "jobId", "artifactStem"],
+          "properties": {
+            "action": { "const": "verify_recording_artifact" }, "sessionId": { "$ref": "#/$defs/sessionIdentity" },
+            "webxrRevision": { "type": "integer", "minimum": 0 }, "jobId": { "$ref": "#/$defs/identity" },
+            "artifactStem": { "$ref": "#/$defs/artifactStem" }
           }
         },
         {

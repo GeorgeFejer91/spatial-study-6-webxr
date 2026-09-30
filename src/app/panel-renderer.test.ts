@@ -19,7 +19,7 @@ interface RendererDrafts {
 describe('StudyPanelRenderer transient privacy boundary', () => {
   it('can initialize the native demographics parity fixture without persistent storage', () => {
     const renderer = new StudyPanelRenderer(
-      {} as SpatialStudyPanel,
+      { hideOverlay: () => undefined } as unknown as SpatialStudyPanel,
       {} as StudyPanelActions,
       {
         firstName: 'Debug',
@@ -43,7 +43,7 @@ describe('StudyPanelRenderer transient privacy boundary', () => {
 
   it('clears setup, participant, demographics, consent, and keypad drafts', () => {
     const renderer = new StudyPanelRenderer(
-      {} as SpatialStudyPanel,
+      { hideOverlay: () => undefined } as unknown as SpatialStudyPanel,
       {} as StudyPanelActions,
     )
     const drafts = renderer as unknown as RendererDrafts

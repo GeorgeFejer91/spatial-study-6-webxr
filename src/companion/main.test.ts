@@ -9,7 +9,6 @@ import {
   loadTrustedPairing,
   saveTrustedPairing,
 } from './trusted-pairing.ts'
-import { deriveStudy6PublicPairingDescriptor } from './public-beacon.ts'
 
 const viewerHarness = vi.hoisted(() => ({
   connectDescriptors: [] as PairingDescriptor[],
@@ -93,6 +92,8 @@ vi.mock('./viewer', () => {
     acceptedScopes: string[]
     stateStale: boolean
     commandGateBlocked: boolean
+    networkRoute: 'direct' | 'relay' | 'unknown'
+    networkRttMs: number | null
   }
 
   const idleSnapshot: MockViewerSnapshot = {
@@ -103,6 +104,8 @@ vi.mock('./viewer', () => {
     acceptedScopes: [] as string[],
     stateStale: false,
     commandGateBlocked: true,
+    networkRoute: 'unknown',
+    networkRttMs: null,
   }
 
   class CompanionViewer extends EventTarget {
@@ -138,6 +141,8 @@ vi.mock('./viewer', () => {
         message: 'BRSP mutual proof verified.',
         peerConnected: true,
         acceptedScopes: ['study.status.read', 'study.experiment.control'],
+        networkRoute: 'direct',
+        networkRttMs: 18,
       }
       this.dispatchEvent(new CustomEvent('statechange', { detail: this.currentSnapshot }))
     }
@@ -182,6 +187,10 @@ function installCompanionDom(): void {
     <button id="start-participant" type="button" disabled></button>
     <span id="participant-hint"></span>
     <span data-field="scopes"></span>
+    <span data-field="controller-network-route"></span>
+    <span data-field="controller-network-rtt"></span>
+    <span data-field="target-network-route"></span>
+    <span data-field="target-network-rtt"></span>
   `
 }
 
@@ -248,32 +257,26 @@ describe('companion trusted-link bootstrap', () => {
 
     expect(location.hash).toBe('')
     expect(document.querySelector<HTMLButtonElement>('#forget-pairing')?.disabled).toBe(false)
+    expect(document.querySelector('#route-badge')?.textContent).toBe('BRSP authenticated')
+    expect(document.querySelector('[data-field="scopes"]')?.textContent).toContain(
+      'study.status.read',
+    )
+    expect(document.querySelector('[data-field="controller-network-route"]')?.textContent)
+      .toBe('Direct WebRTC')
+    expect(document.querySelector('[data-field="controller-network-rtt"]')?.textContent)
+      .toBe('18 ms')
     expect(document.body.textContent).not.toContain(descriptor.key)
+
+    document.querySelector<HTMLButtonElement>('#disconnect')!.click()
+    await vi.waitFor(() => {
+      expect(document.querySelector('#route-badge')?.textContent).toBe('Offline')
+      expect(document.querySelector('[data-field="scopes"]')?.textContent).toBe('—')
+      expect(document.querySelector('[data-field="controller-network-route"]')?.textContent)
+        .toBe('—')
+    })
   })
 
-  it('starts public discovery on a bare visit and auto-connects the first listed headset', async () => {
-    const target = {
-      hint: '0123456789abcdef01234567',
-      label: 'Study 6 WebXR 01234567',
-    }
-    const expectedDescriptor = await deriveStudy6PublicPairingDescriptor(target.hint)
-
-    await import('./main.ts')
-    expect(beaconHarness.startCalls).toBe(1)
-    expect(document.querySelector('#public-discovery-badge')?.textContent).toBe('Listening')
-
-    emitPublicTargets([target])
-    await vi.waitFor(() => expect(viewerHarness.connectDescriptors).toEqual([expectedDescriptor]))
-
-    expect(loadTrustedPairing()).toBeNull()
-    expect(document.querySelector('#public-discovery-badge')?.textContent).toBe('Connected')
-    expect(document.querySelector('#public-discovery-state')?.textContent).toContain('BRSP connected')
-    expect(document.querySelector('#public-target-list')?.textContent).toContain('connected')
-    expect(document.querySelector('#pairing-summary')?.textContent).toContain('open prototype')
-    expect(document.body.textContent).not.toContain(expectedDescriptor.key)
-  })
-
-  it('selects the lowest public hint deterministically when several headsets are listed', async () => {
+  it('lists public availability on a bare visit without deriving or opening a control session', async () => {
     const higher = {
       hint: 'ffffffffffffffffffffffff',
       label: 'Study 6 WebXR FFFFFFFF',
@@ -282,63 +285,45 @@ describe('companion trusted-link bootstrap', () => {
       hint: '000000000000000000000001',
       label: 'Study 6 WebXR 00000000',
     }
-    const expectedDescriptor = await deriveStudy6PublicPairingDescriptor(lower.hint)
 
     await import('./main.ts')
+    expect(beaconHarness.startCalls).toBe(1)
     emitPublicTargets([higher, lower])
-    await vi.waitFor(() => expect(viewerHarness.connectDescriptors).toEqual([expectedDescriptor]))
+    await flushMicrotasks()
 
     const listed = Array.from(document.querySelectorAll('#public-target-list li'))
       .map((item) => item.textContent)
     expect(listed[0]).toContain(lower.label)
     expect(listed[1]).toContain(higher.label)
+    expect(document.querySelector('#public-discovery-badge')?.textContent).toBe('2 online')
+    expect(document.querySelector('#public-discovery-state')?.textContent).toContain(
+      'private trusted-operator link',
+    )
+    expect(document.querySelector('#public-target-list')?.textContent).toContain(
+      'private pairing required',
+    )
+    expect(viewerHarness.connectDescriptors).toHaveLength(0)
+    expect(loadTrustedPairing()).toBeNull()
   })
 
-  it('replaces an unmatched stale saved descriptor with the first online public target', async () => {
-    const stale = createPairingDescriptor()
-    expect(saveTrustedPairing(stale)).toBe(true)
+  it('never replaces a remembered private credential from public availability', async () => {
+    const trusted = createPairingDescriptor()
+    expect(saveTrustedPairing(trusted)).toBe(true)
     const target = {
       hint: '111111111111111111111111',
       label: 'Study 6 WebXR 11111111',
     }
-    const expectedDescriptor = await deriveStudy6PublicPairingDescriptor(target.hint)
 
     await import('./main.ts')
-    await vi.waitFor(() => expect(viewerHarness.connectDescriptors).toEqual([stale]))
+    await vi.waitFor(() => expect(viewerHarness.connectDescriptors).toEqual([trusted]))
     emitPublicTargets([target])
-    await vi.waitFor(() => expect(viewerHarness.connectDescriptors).toEqual([stale, expectedDescriptor]))
-
-    expect(loadTrustedPairing()).toBeNull()
-    expect(document.querySelector('#public-discovery-state')?.textContent).toContain('BRSP connected')
-  })
-
-  it('keeps Cancel authoritative over later public listings until reload', async () => {
-    const first = {
-      hint: '222222222222222222222222',
-      label: 'Study 6 WebXR 22222222',
-    }
-    const second = {
-      hint: '333333333333333333333333',
-      label: 'Study 6 WebXR 33333333',
-    }
-
-    await import('./main.ts')
-    emitPublicTargets([first])
-    await vi.waitFor(() => expect(viewerHarness.connectDescriptors).toHaveLength(1))
-    document.querySelector<HTMLButtonElement>('#disconnect')!.click()
-    await vi.waitFor(() => {
-      expect(document.querySelector('#connection-state')?.textContent).toContain('until reload')
-    })
-
-    emitPublicTargets([second])
     await flushMicrotasks()
-    expect(viewerHarness.connectDescriptors).toHaveLength(1)
-    expect(document.querySelector('#public-discovery-badge')?.textContent).toBe('Canceled')
-    expect(document.querySelector('#public-discovery-state')?.textContent).toContain('Reload or select Connect')
 
-    document.querySelector<HTMLButtonElement>('#connect')!.click()
-    await vi.waitFor(() => expect(viewerHarness.connectDescriptors).toHaveLength(2))
-    expect(document.querySelector('#public-discovery-badge')?.textContent).toBe('Connected')
+    expect(viewerHarness.connectDescriptors).toHaveLength(1)
+    expect(loadTrustedPairing()).toEqual(trusted)
+    expect(document.querySelector('#public-discovery-state')?.textContent).toContain(
+      'Availability never grants control',
+    )
   })
 
   it('keeps an invalid fragment offline and exposes the manual replacement fallback', async () => {

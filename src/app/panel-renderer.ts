@@ -26,10 +26,14 @@ import {
 import type { ParticipantProgress } from '../persistence/database.ts'
 import {
   createSpatialButton,
-  createSystemTextField,
+  createSpatialKeyboard,
+  createSpatialTextField,
   QUESTIONNAIRE_VISUAL_CONTRACT,
   SpatialStudyPanel,
   STUDY_UI_COLORS,
+  type SpatialButton,
+  type SpatialKeyboardMode,
+  type SpatialTextField,
 } from '../ui/index.ts'
 import {
   buttonRow,
@@ -53,6 +57,24 @@ interface DemographicsDraft {
   handedness: Handedness | null
   gender: Gender | null
   consentConfirmed: boolean
+}
+
+interface DemographicsLiveView {
+  language: LanguageCode
+  status: Container
+  statusDot: Container
+  statusText: Text
+  waveform: Container
+  begin: SpatialButton
+  validation: Text
+  polar: PolarStatusProjection
+  recordingSessionReady: boolean
+}
+
+interface BlockReadyLiveView {
+  language: LanguageCode
+  start: SpatialButton
+  warning: Text
 }
 
 const SCROLLABLE_PANEL_PAGES = new Set<ExperimentState['page']>([
@@ -113,9 +135,12 @@ export class StudyPanelRenderer {
   private readonly panel: SpatialStudyPanel
   private readonly actions: StudyPanelActions
   private renderedPage: ExperimentState['page'] | undefined
+  private renderedRevision: number | undefined
   private setup: SetupDraft = freshSetupDraft()
   private participantDraft = ''
   private demographics: DemographicsDraft = freshDemographicsDraft()
+  private demographicsLive: DemographicsLiveView | null = null
+  private blockReadyLive: BlockReadyLiveView | null = null
 
   constructor(
     panel: SpatialStudyPanel,
@@ -132,6 +157,10 @@ export class StudyPanelRenderer {
   /** Clears all operator and participant text held only in the live UI tree. */
   resetTransientState(): void {
     this.renderedPage = undefined
+    this.renderedRevision = undefined
+    this.demographicsLive = null
+    this.blockReadyLive = null
+    this.panel.hideOverlay()
     this.setup = freshSetupDraft()
     this.participantDraft = ''
     this.demographics = freshDemographicsDraft()
@@ -146,23 +175,44 @@ export class StudyPanelRenderer {
       state.page === 'hand_embodiment'
     this.panel.setVisible(state.page !== 'stimulus')
     const pageChanged = this.renderedPage !== state.page
+    const structureChanged = pageChanged || this.renderedRevision !== state.revision
     this.panel.setBodyScrollable(SCROLLABLE_PANEL_PAGES.has(state.page), pageChanged)
-    this.renderedPage = state.page
     this.panel.setDemographicsLayout(state.page === 'demographics')
     this.panel.setInteractionModeControlVisible(
       state.page !== 'operator_setup' && state.page !== 'stimulus',
     )
-    this.panel.setFooter({
-      hint: studyText(language, 'app.incubator_notice'),
-      status: context.localMessage || (context.storageHealthy ? 'Local storage ready' : 'Storage error'),
-      tone: context.storageHealthy ? 'neutral' : 'danger',
-    })
+    if (
+      state.page === 'operator_setup' ||
+      state.page === 'participant_id' ||
+      state.page === 'block_ready' ||
+      state.page === 'technical_hold' ||
+      state.page === 'aborted' ||
+      state.page === 'complete'
+    ) {
+      this.panel.setFooter({
+        hint: studyText(language, 'app.incubator_notice'),
+        status:
+          context.localMessage ||
+          (context.storageHealthy ? 'Local storage ready' : 'Storage error'),
+        tone: context.storageHealthy ? 'neutral' : 'danger',
+      })
+    }
     const block = state.blocks[state.currentBlockIndex]
     this.panel.setHeader({
       eyebrow: 'SPATIAL STUDY 6 | WEBXR',
       title: studyText(language, `page.${state.page}.title` as Parameters<typeof studyText>[1]),
       progress: questionnairePage ? '' : block ? `Block ${block.blockOrder} / 4` : '',
     })
+
+    if (!structureChanged) {
+      this.updateLivePage(state, language, context)
+      return
+    }
+
+    this.renderedPage = state.page
+    this.renderedRevision = state.revision
+    this.demographicsLive = null
+    this.blockReadyLive = null
 
     switch (state.page) {
       case 'operator_setup':
@@ -205,6 +255,54 @@ export class StudyPanelRenderer {
       case 'stimulus':
         break
     }
+  }
+
+  private updateLivePage(
+    state: ExperimentState,
+    language: LanguageCode,
+    context: StudyPanelRenderContext,
+  ): void {
+    if (state.page === 'demographics') {
+      this.updateDemographicsLive(
+        language,
+        context.polar ?? disconnectedPolarStatus(),
+        context.recordingSessionReady ?? false,
+      )
+    } else if (state.page === 'block_ready') {
+      this.updateBlockReadyLive(language, context.startPreflightReady ?? true)
+    }
+  }
+
+  private openSpatialKeyboard(options: {
+    language: LanguageCode
+    title: string
+    initialValue: string
+    maxLength: number
+    mode: SpatialKeyboardMode
+    onChange: (value: string) => void
+    onCommit?: (value: string) => void
+  }): void {
+    const german = options.language === 'de'
+    const keyboard = createSpatialKeyboard({
+      title: options.title,
+      initialValue: options.initialValue,
+      maxLength: options.maxLength,
+      mode: options.mode,
+      doneLabel: german ? 'Fertig' : 'Done',
+      cancelLabel: german ? 'Abbrechen' : 'Cancel',
+      clearLabel: german ? 'Leeren' : 'Clear',
+      backspaceLabel: german ? 'Loeschen' : 'Backspace',
+      spaceLabel: german ? 'Leerzeichen' : 'Space',
+      shiftLabel: 'Shift',
+      onChange: options.onChange,
+      onCommit: (value) => {
+        options.onChange(value)
+        options.onCommit?.(value)
+        this.panel.hideOverlay()
+      },
+      onCancel: () => this.panel.hideOverlay(),
+    })
+    this.panel.showOverlay(keyboard.root)
   }
 
   private renderSetup(): void {
@@ -391,17 +489,29 @@ export class StudyPanelRenderer {
       }
       grid.add(row)
     }
-    const field = createSystemTextField({
-      ariaLabel: studyText(language, 'participant.manual'),
+    let field: SpatialTextField
+    field = createSpatialTextField({
+      value: this.participantDraft,
       placeholder: variantSpec(configuration.variantId).participantPrefix,
-      initialValue: this.participantDraft,
-      maxLength: 32,
-      onValueChange: (value) => {
-        this.participantDraft = value.toUpperCase()
-        start.setDisabled(participantIdViolation(this.participantDraft, configuration.variantId) !== null)
-        projectSelection()
+      onActivate: () => {
+        this.openSpatialKeyboard({
+          language,
+          title: studyText(language, 'participant.manual'),
+          initialValue: this.participantDraft,
+          maxLength: 32,
+          mode: 'token',
+          onChange: (value) => {
+            this.participantDraft = value.toUpperCase()
+            field.setValue(this.participantDraft)
+            start.setDisabled(
+              participantIdViolation(this.participantDraft, configuration.variantId) !== null,
+            )
+            projectSelection()
+          },
+        })
       },
     })
+    field.root.name = 'study6-participant-manual-field'
     const start = createSpatialButton({
       label: studyText(language, 'button.start_participant'),
       width: 360,
@@ -420,7 +530,7 @@ export class StudyPanelRenderer {
     polar: PolarStatusProjection,
     recordingSessionReady: boolean,
   ): void {
-    let refreshValidity = () => undefined
+    let refreshValidity: () => void = () => undefined
     const body = new Container({ width: '100%', flexDirection: 'column', gapRow: 0 })
     body.name = 'study6-demographics'
 
@@ -450,22 +560,24 @@ export class StudyPanelRenderer {
       borderRadius: 8,
     })
     polarStatus.name = 'study6-demographics-polar-status'
+    const statusDot = new Container({
+      width: 18,
+      height: 18,
+      marginRight: 10,
+      backgroundColor: statusColor,
+      borderRadius: 9,
+    })
+    const statusText = new Text({
+      flexGrow: 1,
+      text: this.polarStatusText(language, polar, polarReady, recordingSessionReady),
+      color: STUDY_UI_COLORS.text,
+      fontSize: 14,
+      fontWeight: 'bold',
+      lineHeight: '120%',
+    })
     polarStatus.add(
-      new Container({
-        width: 18,
-        height: 18,
-        marginRight: 10,
-        backgroundColor: statusColor,
-        borderRadius: 9,
-      }),
-      new Text({
-        flexGrow: 1,
-        text: this.polarStatusText(language, polar, polarReady, recordingSessionReady),
-        color: STUDY_UI_COLORS.text,
-        fontSize: 14,
-        fontWeight: 'bold',
-        lineHeight: '120%',
-      }),
+      statusDot,
+      statusText,
       new Container({
         width: 300,
         height: 42,
@@ -516,6 +628,7 @@ export class StudyPanelRenderer {
     const right = new Container({ width: 478, flexDirection: 'column' })
 
     const labeledField = (options: {
+      name: string
       label: string
       value: string
       width: number
@@ -526,17 +639,35 @@ export class StudyPanelRenderer {
       const group = new Container({ width: options.width, flexDirection: 'column' })
       const label = paragraph(options.label, { size: 16, width: options.width })
       label.setProperties({ fontWeight: 'bold', paddingBottom: 4 })
-      const field = createSystemTextField({
-        ariaLabel: options.label,
-        initialValue: options.value,
+      let field: SpatialTextField
+      field = createSpatialTextField({
+        value: options.value,
         width: options.width,
-        inputMode: options.inputMode,
-        maxLength: options.maxLength,
-        onValueChange: (value) => {
-          options.changed(value)
-          refreshValidity()
+        onActivate: () => {
+          this.openSpatialKeyboard({
+            language,
+            title: options.label,
+            initialValue:
+              options.inputMode === 'tel'
+                ? this.demographics.ageYears?.toString() ?? ''
+                : options.label === studyText(language, 'demographics.first_name')
+                  ? this.demographics.firstName
+                  : this.demographics.lastName,
+            maxLength: options.maxLength,
+            mode: options.inputMode === 'tel' ? 'number' : 'name',
+            onChange: (value) => {
+              options.changed(value)
+              field.setValue(
+                options.inputMode === 'tel'
+                  ? this.demographics.ageYears?.toString() ?? ''
+                  : value,
+              )
+              refreshValidity()
+            },
+          })
         },
       })
+      field.root.name = options.name
       group.add(label, field.root)
       return group
     }
@@ -549,6 +680,7 @@ export class StudyPanelRenderer {
     })
     names.add(
       labeledField({
+        name: 'study6-demographics-first-name',
         label: studyText(language, 'demographics.first_name'),
         value: this.demographics.firstName,
         width: 260,
@@ -558,6 +690,7 @@ export class StudyPanelRenderer {
         },
       }),
       labeledField({
+        name: 'study6-demographics-last-name',
         label: studyText(language, 'demographics.last_name'),
         value: this.demographics.lastName,
         width: 260,
@@ -570,6 +703,7 @@ export class StudyPanelRenderer {
     left.add(names)
     left.add(
       labeledField({
+        name: 'study6-demographics-age',
         label: studyText(language, 'demographics.age'),
         value: this.demographics.ageYears?.toString() ?? '',
         width: 248,
@@ -746,26 +880,71 @@ export class StudyPanelRenderer {
     demographicsFooter.add(back.root, validation, begin.root)
     right.add(demographicsFooter)
 
-    refreshValidity = () => {
-      const candidate = this.demographicsValue()
-      const invalid = candidate === null || validateDemographics(candidate).length > 0
-      begin.setDisabled(invalid || !ready)
-      validation.setProperties({
-        text: !ready
-          ? language === 'de'
-            ? 'Warte auf sitzungseigene ECG-Aufzeichnung.'
-            : 'Waiting for this session-owned ECG recording.'
-          : invalid
-            ? studyText(language, 'validation.demographics')
-            : '',
-      })
-    }
-    refreshValidity()
-
     columns.add(left, right)
     body.add(columns)
     this.panel.replaceBody(body)
     this.panel.hideFooter()
+    this.demographicsLive = {
+      language,
+      status: polarStatus,
+      statusDot,
+      statusText,
+      waveform,
+      begin,
+      validation,
+      polar,
+      recordingSessionReady,
+    }
+    refreshValidity = () => this.refreshDemographicsValidity()
+    this.updateDemographicsLive(language, polar, recordingSessionReady)
+  }
+
+  private refreshDemographicsValidity(): void {
+    const live = this.demographicsLive
+    if (!live) return
+    const ready = polarProjectionIsReady(live.polar) && live.recordingSessionReady
+    const candidate = this.demographicsValue()
+    const invalid = candidate === null || validateDemographics(candidate).length > 0
+    live.begin.setDisabled(invalid || !ready)
+    live.validation.setProperties({
+      text: !ready
+        ? live.language === 'de'
+          ? 'Warte auf sitzungseigene ECG-Aufzeichnung.'
+          : 'Waiting for this session-owned ECG recording.'
+        : invalid
+          ? studyText(live.language, 'validation.demographics')
+          : '',
+    })
+  }
+
+  private updateDemographicsLive(
+    language: LanguageCode,
+    polar: PolarStatusProjection,
+    recordingSessionReady: boolean,
+  ): void {
+    const live = this.demographicsLive
+    if (!live) return
+    live.language = language
+    live.polar = polar
+    live.recordingSessionReady = recordingSessionReady
+    const polarReady = polarProjectionIsReady(polar)
+    const ready = polarReady && recordingSessionReady
+    const statusColor = ready
+      ? STUDY_UI_COLORS.success
+      : polar.phase === 'fault'
+        ? STUDY_UI_COLORS.danger
+        : STUDY_UI_COLORS.warning
+    live.status.setProperties({
+      backgroundColor: ready ? STUDY_UI_COLORS.successSoft : STUDY_UI_COLORS.warningSoft,
+      borderColor: statusColor,
+    })
+    live.statusDot.setProperties({ backgroundColor: statusColor })
+    live.statusText.setProperties({
+      text: this.polarStatusText(language, polar, polarReady, recordingSessionReady),
+    })
+    live.waveform.setProperties({ borderColor: statusColor })
+    this.renderPolarWaveform(live.waveform, polar, statusColor, language)
+    this.refreshDemographicsValidity()
   }
 
   private polarStatusText(
@@ -776,9 +955,10 @@ export class StudyPanelRenderer {
   ): string {
     if (polarReady && recordingSessionReady) {
       const hr = polar.heartRateBpm ?? 0
+      const rr = polar.rrIntervalMs === null ? '—' : `${polar.rrIntervalMs} ms`
       return language === 'de'
-        ? `Polar H10 ECG bereit\nHF ${hr} | ${polar.ecgSampleRateHz} Hz | ${polar.ecgSampleCount} Samples`
-        : `Polar H10 ECG ready\nHR ${hr} | ${polar.ecgSampleRateHz} Hz | ${polar.ecgSampleCount} samples`
+        ? `Polar H10 ECG bereit\nHF ${hr} | RR ${rr} | ${polar.ecgSampleRateHz} Hz | ${polar.ecgSampleCount} Samples`
+        : `Polar H10 ECG ready\nHR ${hr} | RR ${rr} | ${polar.ecgSampleRateHz} Hz | ${polar.ecgSampleCount} samples`
     }
     if (polarReady) {
       return language === 'de'
@@ -795,44 +975,64 @@ export class StudyPanelRenderer {
     color: string,
     language: LanguageCode,
   ): void {
-    if (polar.previewKind !== 'real_samples' || polar.waveformMicrovolts.length === 0) {
-      const empty = new Text({
-        text: language === 'de' ? 'WARTE AUF ECHTE ECG-SAMPLES' : 'WAITING FOR REAL ECG SAMPLES',
+    let empty = target.getObjectByName('study6-polar-waveform-empty') as Text | undefined
+    if (!empty) {
+      empty = new Text({
+        text: '',
         color: STUDY_UI_COLORS.textMuted,
         fontSize: 10,
         fontWeight: 'bold',
       })
       empty.name = 'study6-polar-waveform-empty'
       target.add(empty)
+    }
+    let graph = target.getObjectByName('study6-polar-waveform-real') as Container | undefined
+    if (!graph) {
+      graph = new Container({
+        width: 280,
+        height: 34,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gapColumn: 1,
+      })
+      graph.name = 'study6-polar-waveform-real'
+      target.add(graph)
+    }
+    if (polar.previewKind !== 'real_samples' || polar.waveformMicrovolts.length === 0) {
+      empty.setProperties({
+        text: language === 'de' ? 'WARTE AUF ECHTE ECG-SAMPLES' : 'WAITING FOR REAL ECG SAMPLES',
+        display: 'flex',
+      })
+      graph.setProperties({ display: 'none' })
       return
     }
 
+    empty.setProperties({ display: 'none' })
+    graph.setProperties({ display: 'flex' })
     const maximumBars = 48
     const step = Math.max(1, Math.ceil(polar.waveformMicrovolts.length / maximumBars))
     const samples = polar.waveformMicrovolts.filter((_, index) => index % step === 0).slice(-maximumBars)
     const mean = samples.reduce((sum, value) => sum + value, 0) / samples.length
     const centered = samples.map((value) => value - mean)
     const amplitude = Math.max(1, ...centered.map((value) => Math.abs(value)))
-    const graph = new Container({
-      width: 280,
-      height: 34,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gapColumn: 1,
-    })
-    graph.name = 'study6-polar-waveform-real'
+    if (graph.children.length !== centered.length) {
+      const previousBars = [...graph.children]
+      graph.remove(...previousBars)
+      previousBars.forEach((child) => (child as Container).dispose())
+      centered.forEach((_, index) => {
+        const bar = new Container({ width: 4, height: 2, borderRadius: 1 })
+        bar.name = `study6-polar-waveform-sample-${index}`
+        graph.add(bar)
+      })
+    }
     centered.forEach((value, index) => {
-      const bar = new Container({
-        width: 4,
+      const bar = graph.children[index] as Container
+      bar.setProperties({
         height: Math.max(2, Math.round((Math.abs(value) / amplitude) * 30)),
         backgroundColor: color,
-        borderRadius: 1,
       })
-      bar.name = `study6-polar-waveform-sample-${index}`
-      graph.add(bar)
     })
-    target.add(graph)
   }
 
   private demographicsValue(): Demographics | null {
@@ -866,8 +1066,16 @@ export class StudyPanelRenderer {
       width: 400,
       disabled: !startPreflightReady,
       onActivate: () => this.actions.startBlock(),
-    }).root
-    start.name = 'study6-block-start'
+    })
+    start.root.name = 'study6-block-start'
+    const warning = paragraph(
+      language === 'de'
+        ? 'ECG ist nicht bereit. Der Blockstart bleibt gesperrt, bis Live-130-Hz-ECG und der dauerhafte Schreiber bereit sind.'
+        : 'ECG is not ready. Block start stays locked until live 130 Hz ECG and its durable writer are ready.',
+      { size: 18, color: STUDY_UI_COLORS.warning },
+    )
+    warning.name = 'study6-block-start-warning'
+    warning.setProperties({ display: startPreflightReady ? 'none' : 'flex' })
     body.add(
       paragraph(
         formatStudyText(language, 'block.heading', {
@@ -891,19 +1099,28 @@ export class StudyPanelRenderer {
         { size: 21, color: STUDY_UI_COLORS.textMuted },
       ),
       paragraph(studyText(language, 'block.instructions'), { size: 22 }),
-      ...(startPreflightReady
-        ? []
-        : [
-            paragraph(
-              language === 'de'
-                ? 'ECG ist nicht bereit. Der Blockstart bleibt gesperrt, bis Live-130-Hz-ECG und der dauerhafte Schreiber bereit sind.'
-                : 'ECG is not ready. Block start stays locked until live 130 Hz ECG and its durable writer are ready.',
-              { size: 18, color: STUDY_UI_COLORS.warning },
-            ),
-          ]),
-      start,
+      warning,
+      start.root,
     )
     this.panel.replaceBody(body)
+    this.blockReadyLive = { language, start, warning }
+  }
+
+  private updateBlockReadyLive(
+    language: LanguageCode,
+    startPreflightReady: boolean,
+  ): void {
+    const live = this.blockReadyLive
+    if (!live) return
+    live.language = language
+    live.start.setDisabled(!startPreflightReady)
+    live.warning.setProperties({
+      display: startPreflightReady ? 'none' : 'flex',
+      text:
+        language === 'de'
+          ? 'ECG ist nicht bereit. Der Blockstart bleibt gesperrt, bis Live-130-Hz-ECG und der dauerhafte Schreiber bereit sind.'
+          : 'ECG is not ready. Block start stays locked until live 130 Hz ECG and its durable writer are ready.',
+    })
   }
 
   private renderQuestionnaireFooter(options: {

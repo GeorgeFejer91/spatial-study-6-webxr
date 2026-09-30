@@ -54,7 +54,11 @@ describe('companion pairing protocol', () => {
     expect(JSON.stringify(encrypted)).not.toContain('pause_media')
     await expect(decryptCompanionMessage(descriptor.key, encrypted)).resolves.toEqual(message)
 
-    const tampered = { ...encrypted, ciphertext: `${encrypted.ciphertext.slice(0, -1)}A` }
+    const replacement = encrypted.ciphertext[0] === 'A' ? 'B' : 'A'
+    const tampered = {
+      ...encrypted,
+      ciphertext: `${replacement}${encrypted.ciphertext.slice(1)}`,
+    }
     await expect(decryptCompanionMessage(descriptor.key, tampered)).rejects.toBeDefined()
   })
 

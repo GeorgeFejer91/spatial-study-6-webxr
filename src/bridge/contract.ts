@@ -10,6 +10,10 @@ export const REQUIRED_APK_BRIDGE_CAPABILITIES = [
   'session_owned_recording',
   'durable_markers',
   'polar_status_projection',
+  'recording_jobs',
+  'timed_recording_jobs',
+  'recording_job_pause_resume',
+  'recording_artifact_verification',
 ] as const
 
 export type BridgeRole = 'apk' | 'webxr' | 'controller'
@@ -69,6 +73,7 @@ export interface PolarStatusProjection {
   ready: boolean
   readinessReason: string
   heartRateBpm: number | null
+  rrIntervalMs: number | null
   rrIntervalCount: number
   ecgSampleRateHz: number | null
   ecgSampleCount: number
@@ -103,6 +108,34 @@ export interface SensorRecordingProjection {
   droppedBatches: number
   artifactOpen: boolean
   durable: boolean
+  job: SensorRecordingJobProjection
+}
+
+export type SensorRecordingJobState =
+  | 'idle'
+  | 'recording'
+  | 'paused'
+  | 'stopping'
+  | 'completed'
+  | 'fault'
+
+export interface SensorRecordingJobProjection {
+  state: SensorRecordingJobState
+  jobId: string | null
+  artifactStem: string | null
+  requestedDurationMs: number | null
+  activeDurationMs: number
+  samplesWritten: number
+  droppedBatches: number
+  artifactComplete: boolean
+  durable: boolean
+}
+
+export interface BridgeRecordingJobPlan {
+  sessionId: string
+  webxrRevision: number
+  jobId: string
+  artifactStem: string
 }
 
 interface BridgeHelloPayloadBase {
@@ -153,6 +186,12 @@ export const BRIDGE_SENSOR_ACTIONS = [
   'request_status',
   'reconnect_sensor',
   'begin_recording',
+  'start_recording_job',
+  'record_for',
+  'pause_recording_job',
+  'resume_recording_job',
+  'stop_recording_job',
+  'verify_recording_artifact',
   'record_experiment_marker',
   'finalize_recording',
   'request_sensor_export',
@@ -160,6 +199,17 @@ export const BRIDGE_SENSOR_ACTIONS = [
 ] as const
 
 export type BridgeSensorAction = (typeof BRIDGE_SENSOR_ACTIONS)[number]
+export type BridgeNoArgumentSensorAction = Exclude<
+  BridgeSensorAction,
+  | 'begin_recording'
+  | 'start_recording_job'
+  | 'record_for'
+  | 'pause_recording_job'
+  | 'resume_recording_job'
+  | 'stop_recording_job'
+  | 'verify_recording_artifact'
+  | 'record_experiment_marker'
+>
 
 export const EXPERIMENT_MARKER_EVENT_TYPES = [
   'experiment_ready',
@@ -197,9 +247,18 @@ export type BridgeCommandPayload =
       webxrRevision: number
       recordingRequestId: string
     }
+  | ({ action: 'start_recording_job' } & BridgeRecordingJobPlan)
+  | ({ action: 'record_for'; durationMs: number } & BridgeRecordingJobPlan)
+  | {
+      action: 'pause_recording_job' | 'resume_recording_job' | 'stop_recording_job'
+      sessionId: string
+      webxrRevision: number
+      jobId: string
+    }
+  | ({ action: 'verify_recording_artifact' } & BridgeRecordingJobPlan)
   | { action: 'record_experiment_marker'; marker: BridgeExperimentMarker }
   | {
-      action: Exclude<BridgeSensorAction, 'begin_recording' | 'record_experiment_marker'>
+      action: BridgeNoArgumentSensorAction
     }
 
 export type BridgeInboundEnvelope =
@@ -294,6 +353,7 @@ const polarStatusSchema = z.object({
   ready: z.boolean(),
   readinessReason: z.string().max(256),
   heartRateBpm: z.number().int().min(20).max(260).nullable(),
+  rrIntervalMs: z.number().int().positive().max(4_000).nullable(),
   rrIntervalCount: z.number().int().nonnegative(),
   ecgSampleRateHz: z.number().int().positive().max(2_000).nullable(),
   ecgSampleCount: z.number().int().nonnegative(),
@@ -322,6 +382,20 @@ const snapshotSchema = z.object({
     droppedBatches: z.number().int().nonnegative(),
     artifactOpen: z.boolean(),
     durable: z.boolean(),
+    job: z.object({
+      state: z.enum(['idle', 'recording', 'paused', 'stopping', 'completed', 'fault']),
+      jobId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u).nullable(),
+      artifactStem: z
+        .string()
+        .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u)
+        .nullable(),
+      requestedDurationMs: z.number().int().min(100).max(86_400_000).nullable(),
+      activeDurationMs: z.number().int().nonnegative(),
+      samplesWritten: z.number().int().nonnegative(),
+      droppedBatches: z.number().int().nonnegative(),
+      artifactComplete: z.boolean(),
+      durable: z.boolean(),
+    }).strict(),
   }).strict(),
   polar: polarStatusSchema,
 }).strict()
@@ -331,6 +405,36 @@ const beginRecordingCommandSchema = z.object({
   sessionId: z.string().regex(/^[A-Za-z0-9._-]{1,96}$/u),
   webxrRevision: z.number().int().nonnegative(),
   recordingRequestId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u),
+}).strict()
+
+const recordingJobPlanShape = {
+  sessionId: z.string().regex(/^[A-Za-z0-9._-]{1,96}$/u),
+  webxrRevision: z.number().int().nonnegative(),
+  jobId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u),
+  artifactStem: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u),
+}
+
+const startRecordingJobCommandSchema = z.object({
+  action: z.literal('start_recording_job'),
+  ...recordingJobPlanShape,
+}).strict()
+
+const recordForCommandSchema = z.object({
+  action: z.literal('record_for'),
+  ...recordingJobPlanShape,
+  durationMs: z.number().int().min(100).max(86_400_000),
+}).strict()
+
+const recordingJobControlCommandSchema = z.object({
+  action: z.enum(['pause_recording_job', 'resume_recording_job', 'stop_recording_job']),
+  sessionId: z.string().regex(/^[A-Za-z0-9._-]{1,96}$/u),
+  webxrRevision: z.number().int().nonnegative(),
+  jobId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u),
+}).strict()
+
+const verifyRecordingArtifactCommandSchema = z.object({
+  action: z.literal('verify_recording_artifact'),
+  ...recordingJobPlanShape,
 }).strict()
 
 const markerCommandSchema = z.object({
@@ -350,6 +454,10 @@ const noArgumentCommandSchema = z.object({
 
 const commandSchema = z.discriminatedUnion('action', [
   beginRecordingCommandSchema,
+  startRecordingJobCommandSchema,
+  recordForCommandSchema,
+  recordingJobControlCommandSchema,
+  verifyRecordingArtifactCommandSchema,
   markerCommandSchema,
   noArgumentCommandSchema,
 ])
@@ -376,6 +484,7 @@ export function disconnectedPolarStatus(reason = 'Sensor bridge unavailable'): P
     ready: false,
     readinessReason: reason,
     heartRateBpm: null,
+    rrIntervalMs: null,
     rrIntervalCount: 0,
     ecgSampleRateHz: null,
     ecgSampleCount: 0,
@@ -507,6 +616,13 @@ export function parseBridgeOutboundEnvelope(value: unknown): BridgeOutboundEnvel
   const payload = commandSchema.parse(envelope.payload)
   if (payload.action === 'begin_recording' && envelope.sessionId !== payload.sessionId) {
     throw new Error('begin_recording envelope sessionId must match payload.sessionId.')
+  }
+  if (
+    payload.action !== 'record_experiment_marker' &&
+    'sessionId' in payload &&
+    envelope.sessionId !== payload.sessionId
+  ) {
+    throw new Error(`${payload.action} envelope sessionId must match payload.sessionId.`)
   }
   if (
     payload.action === 'record_experiment_marker' &&

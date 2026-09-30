@@ -15,12 +15,14 @@ import {
   type BridgeErrorPayload,
   type BridgeExperimentMarker,
   type BridgeInboundEnvelope,
-  type BridgeSensorAction,
+  type BridgeNoArgumentSensorAction,
   type BridgeOutboundEnvelope,
   type BridgeReceiptPayload,
   type BridgeReceiptStage,
+  type BridgeRecordingJobPlan,
   type BridgeSnapshotPayload,
   type PolarStatusProjection,
+  type SensorRecordingJobProjection,
   type WebXrBridgeHelloPayload,
 } from './contract.ts'
 import {
@@ -76,6 +78,11 @@ export interface StudyBridgeClientOptions {
   handshakeTimeoutMs?: number
   reconnectDelaysMs?: readonly number[]
   createId?: () => string
+}
+
+export interface TimedRecordingJobResult {
+  started: BridgeCommandResult
+  completed: SensorRecordingJobProjection
 }
 
 const DEFAULT_RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000] as const
@@ -223,6 +230,10 @@ export class StudyBridgeClient {
         'begin_recording',
         'session_owned_recording',
         'durable_markers',
+        'recording_jobs',
+        'timed_recording_jobs',
+        'recording_job_pause_resume',
+        'recording_artifact_verification',
         PLACEHOLDER_STIMULUS_MODE,
       ],
       authority: 'webxr_experiment_owner',
@@ -232,7 +243,7 @@ export class StudyBridgeClient {
   }
 
   applySensorAction(
-    action: Exclude<BridgeSensorAction, 'begin_recording' | 'record_experiment_marker'>,
+    action: BridgeNoArgumentSensorAction,
     targetStage: BridgeReceiptStage = 'persisted',
   ): Promise<BridgeCommandResult> {
     return this.command({ action }, targetStage)
@@ -248,6 +259,159 @@ export class StudyBridgeClient {
       { action: 'begin_recording', sessionId, webxrRevision, recordingRequestId },
       targetStage,
       sessionId,
+    )
+  }
+
+  startRecordingJob(
+    plan: BridgeRecordingJobPlan,
+    targetStage: BridgeReceiptStage = 'observed',
+  ): Promise<BridgeCommandResult> {
+    return this.command(
+      { action: 'start_recording_job', ...plan },
+      targetStage,
+      plan.sessionId,
+    )
+  }
+
+  recordFor(
+    plan: BridgeRecordingJobPlan,
+    durationMs: number,
+    targetStage: BridgeReceiptStage = 'observed',
+  ): Promise<BridgeCommandResult> {
+    return this.command(
+      { action: 'record_for', ...plan, durationMs },
+      targetStage,
+      plan.sessionId,
+    )
+  }
+
+  /**
+   * Convenience API for future WebXR experiments that need both halves of a timed operation:
+   * an observed start receipt, followed by an unsolicited durable completion snapshot from the
+   * APK's monotonic receiver-local timer.
+   */
+  async recordForUntilCompleted(
+    plan: BridgeRecordingJobPlan,
+    durationMs: number,
+    completionTimeoutMs = Math.min(
+      86_460_000,
+      durationMs + Math.max(30_000, this.commandTimeoutMs * 2),
+    ),
+  ): Promise<TimedRecordingJobResult> {
+    if (
+      !Number.isSafeInteger(completionTimeoutMs) ||
+      completionTimeoutMs < 1 ||
+      completionTimeoutMs > 86_460_000
+    ) {
+      throw new Error('completionTimeoutMs must be from 1 through 86460000 milliseconds.')
+    }
+    const started = await this.recordFor(plan, durationMs, 'observed')
+    const completed = await this.waitForRecordingJobCompletion(plan.jobId, completionTimeoutMs)
+    return { started, completed }
+  }
+
+  waitForRecordingJobCompletion(
+    jobId: string,
+    timeoutMs: number,
+  ): Promise<SensorRecordingJobProjection> {
+    if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(jobId)) {
+      return Promise.reject(new Error('jobId is malformed.'))
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86_460_000) {
+      return Promise.reject(
+        new Error('timeoutMs must be from 1 through 86460000 milliseconds.'),
+      )
+    }
+
+    const observe = (projection: StudyBridgeProjection): SensorRecordingJobProjection | Error | null => {
+      if (!projection.sensorConnected) {
+        return new Error(`Sensor bridge disconnected while waiting for recording job ${jobId}.`)
+      }
+      const job = projection.snapshot?.recording.job
+      if (!job || job.jobId !== jobId) return null
+      if (job.state === 'fault') {
+        return new Error(`Recording job ${jobId} entered the fault state.`)
+      }
+      if (job.state !== 'completed') return null
+      if (!job.artifactComplete || !job.durable) {
+        return new Error(`Recording job ${jobId} completed without a durable artifact.`)
+      }
+      return structuredClone(job)
+    }
+
+    const current = observe(this.snapshot())
+    if (current instanceof Error) return Promise.reject(current)
+    if (current !== null) return Promise.resolve(current)
+
+    return new Promise<SensorRecordingJobProjection>((resolve, reject) => {
+      let settled = false
+      let unsubscribe: () => void = () => undefined
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        unsubscribe()
+        reject(new Error(`Timed out waiting for recording job ${jobId} to complete durably.`))
+      }, timeoutMs)
+      unsubscribe = this.subscribe((projection) => {
+        if (settled) return
+        const result = observe(projection)
+        if (result === null) return
+        settled = true
+        clearTimeout(timer)
+        unsubscribe()
+        if (result instanceof Error) reject(result)
+        else resolve(result)
+      })
+    })
+  }
+
+  pauseRecordingJob(
+    sessionId: string,
+    webxrRevision: number,
+    jobId: string,
+    targetStage: BridgeReceiptStage = 'observed',
+  ): Promise<BridgeCommandResult> {
+    return this.command(
+      { action: 'pause_recording_job', sessionId, webxrRevision, jobId },
+      targetStage,
+      sessionId,
+    )
+  }
+
+  resumeRecordingJob(
+    sessionId: string,
+    webxrRevision: number,
+    jobId: string,
+    targetStage: BridgeReceiptStage = 'observed',
+  ): Promise<BridgeCommandResult> {
+    return this.command(
+      { action: 'resume_recording_job', sessionId, webxrRevision, jobId },
+      targetStage,
+      sessionId,
+    )
+  }
+
+  stopRecordingJob(
+    sessionId: string,
+    webxrRevision: number,
+    jobId: string,
+    targetStage: BridgeReceiptStage = 'observed',
+  ): Promise<BridgeCommandResult> {
+    return this.command(
+      { action: 'stop_recording_job', sessionId, webxrRevision, jobId },
+      targetStage,
+      sessionId,
+    )
+  }
+
+  verifyRecordingArtifact(
+    plan: BridgeRecordingJobPlan,
+    targetStage: BridgeReceiptStage = 'observed',
+  ): Promise<BridgeCommandResult> {
+    return this.command(
+      { action: 'verify_recording_artifact', ...plan },
+      targetStage,
+      plan.sessionId,
     )
   }
 

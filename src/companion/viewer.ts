@@ -27,6 +27,10 @@ import {
   type VdoNinjaSdk,
   type VdoTrackDetail,
 } from './vdo-sdk.ts'
+import {
+  sanitizePeerQuality,
+  type CompanionNetworkRoute,
+} from './network-quality.ts'
 
 export interface CommandAcknowledgement {
   commandId: string
@@ -46,6 +50,8 @@ export interface CompanionViewerSnapshot {
   acceptedScopes: string[]
   stateStale: boolean
   commandGateBlocked: boolean
+  networkRoute: CompanionNetworkRoute
+  networkRttMs: number | null
 }
 
 export interface CompanionViewerOptions {
@@ -55,6 +61,8 @@ export interface CompanionViewerOptions {
 function detailEvent<T>(type: string, detail: T): CustomEvent<T> {
   return new CustomEvent(type, { detail })
 }
+
+const QUALITY_POLL_INTERVAL_MS = 2_000
 
 /** Phone/PC BRSP controller for the WebXR experiment target. */
 export class CompanionViewer extends EventTarget {
@@ -76,6 +84,9 @@ export class CompanionViewer extends EventTarget {
   private stateStale = false
   private staleTimer: number | undefined
   private authenticationTimer: number | undefined
+  private qualityTimer: number | undefined
+  private networkRoute: CompanionViewerSnapshot['networkRoute'] = 'unknown'
+  private networkRttMs: number | null = null
   private tearingDown = false
   private readonly authenticationTimeoutMs: number
 
@@ -100,6 +111,8 @@ export class CompanionViewer extends EventTarget {
         || [...this.pendingCommands.values()].some(({ timedOut }) => !timedOut)
         || this.awaitingStatusCommandId !== null
         || this.outcomeUnknown,
+      networkRoute: this.networkRoute,
+      networkRttMs: this.networkRttMs,
     }
   }
 
@@ -131,6 +144,7 @@ export class CompanionViewer extends EventTarget {
         allowresources: false,
         label: 'Spatial Study 6 BRSP companion',
       })
+      this.startQualityMonitor(transport)
       if (this.brsp.phase !== 'ready') {
         this.message = 'Data-only peer opened; waiting for BRSP mutual authentication…'
         this.authenticationTimer = window.setTimeout(() => {
@@ -239,6 +253,7 @@ export class CompanionViewer extends EventTarget {
       this.stateStale = false
       this.message = 'BRSP mutual proof verified; waiting for authoritative status…'
       this.startStaleMonitor()
+      void this.refreshNetworkQuality(transport)
       this.emitState()
     })
     connection.addEventListener('snapshot', (event) => {
@@ -382,6 +397,7 @@ export class CompanionViewer extends EventTarget {
     this.authenticationTimer = undefined
     if (this.staleTimer !== undefined) window.clearInterval(this.staleTimer)
     this.staleTimer = undefined
+    this.clearQualityMonitor()
     const brsp = this.brsp
     this.brsp = null
     const closeBrsp = brsp?.close().catch(() => undefined)
@@ -398,9 +414,36 @@ export class CompanionViewer extends EventTarget {
     this.awaitingStatusCommandId = null
     this.latestStatusCommandId = null
     this.outcomeUnknown = false
+    this.networkRoute = 'unknown'
+    this.networkRttMs = null
     for (const pending of this.pendingCommands.values()) window.clearTimeout(pending.timer)
     this.pendingCommands.clear()
     await Promise.all([closeBrsp, disconnectSdk])
+  }
+
+  private startQualityMonitor(transport: Study6BrspVdoPeerTransport): void {
+    this.clearQualityMonitor()
+    void this.refreshNetworkQuality(transport)
+    this.qualityTimer = window.setInterval(() => {
+      void this.refreshNetworkQuality(transport)
+    }, QUALITY_POLL_INTERVAL_MS)
+  }
+
+  private clearQualityMonitor(): void {
+    if (this.qualityTimer !== undefined) window.clearInterval(this.qualityTimer)
+    this.qualityTimer = undefined
+  }
+
+  private async refreshNetworkQuality(
+    transport: Study6BrspVdoPeerTransport,
+  ): Promise<void> {
+    const quality = await transport.getPeerQuality()
+    if (this.transport !== transport || this.tearingDown || !quality) return
+    const { route, rttMs } = sanitizePeerQuality(quality)
+    if (route === this.networkRoute && rttMs === this.networkRttMs) return
+    this.networkRoute = route
+    this.networkRttMs = rttMs
+    this.emitState()
   }
 
   private emitState(): void {

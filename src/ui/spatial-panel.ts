@@ -51,6 +51,7 @@ export class SpatialStudyPanel {
   readonly header: Container
   readonly body: Container
   readonly footer: Container
+  readonly overlay: Container
   readonly eyebrow: Text
   readonly title: Text
   readonly progress: Text
@@ -203,7 +204,22 @@ export class SpatialStudyPanel {
     })
     this.footer.add(this.footerHint, this.footerStatus)
 
-    this.root.add(this.header, this.body, this.footer)
+    this.overlay = new Container({
+      width: '100%',
+      height: '100%',
+      positionType: 'absolute',
+      positionTop: 0,
+      positionRight: 0,
+      positionBottom: 0,
+      positionLeft: 0,
+      zIndex: 100,
+      display: 'none',
+      pointerEvents: 'none',
+      backgroundColor: STUDY_UI_COLORS.panel,
+    })
+    this.overlay.name = 'study6-spatial-panel-overlay'
+
+    this.root.add(this.header, this.body, this.footer, this.overlay)
   }
 
   setHeader(options: { eyebrow?: string; title?: string; progress?: string }): void {
@@ -326,11 +342,27 @@ export class SpatialStudyPanel {
   }
 
   replaceBody(...children: Object3D[]): void {
+    this.hideOverlay()
     const previousChildren = [...this.body.children]
     previousChildren.forEach(disposeSystemTextFieldsIn)
     this.body.remove(...previousChildren)
     previousChildren.forEach(disposeObject)
     this.body.add(...children)
+  }
+
+  showOverlay(...children: Object3D[]): void {
+    const previousChildren = [...this.overlay.children]
+    this.overlay.remove(...previousChildren)
+    previousChildren.forEach(disposeObject)
+    this.overlay.add(...children)
+    this.overlay.setProperties({ display: 'flex', pointerEvents: 'auto' })
+  }
+
+  hideOverlay(): void {
+    const previousChildren = [...this.overlay.children]
+    this.overlay.remove(...previousChildren)
+    previousChildren.forEach(disposeObject)
+    this.overlay.setProperties({ display: 'none', pointerEvents: 'none' })
   }
 
   replaceFooter(...children: Object3D[]): void {

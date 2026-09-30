@@ -10,6 +10,7 @@ export function readyPolarProjection(): PolarStatusProjection {
     ready: true,
     readinessReason: 'ready',
     heartRateBpm: 64,
+    rrIntervalMs: 938,
     rrIntervalCount: 20,
     ecgSampleRateHz: 130,
     ecgSampleCount: 3_900,
@@ -31,7 +32,7 @@ export function readyPolarProjection(): PolarStatusProjection {
 export function apkHelloPayload(): ApkBridgeHelloPayload {
   return {
     schemaRevision: 2,
-    buildId: 'sensor-bridge-0.2.0',
+    buildId: 'sensor-bridge-0.4.0',
     capabilities: [
       'polar_h10_ecg',
       'durable_ecg',
@@ -40,6 +41,10 @@ export function apkHelloPayload(): ApkBridgeHelloPayload {
       'begin_recording',
       'session_owned_recording',
       'polar_status_projection',
+      'recording_jobs',
+      'timed_recording_jobs',
+      'recording_job_pause_resume',
+      'recording_artifact_verification',
     ],
     authority: 'sensor_recorder_provider',
   }
@@ -52,6 +57,7 @@ export function acquisitionSnapshotPayload(
     ready: false,
     readinessReason: 'sensor-not-connected',
     heartRateBpm: null,
+    rrIntervalMs: null,
     rrIntervalCount: 0,
     ecgSampleRateHz: null,
     ecgSampleCount: 0,
@@ -80,6 +86,17 @@ export function acquisitionSnapshotPayload(
       droppedBatches: 0,
       artifactOpen: true,
       durable: true,
+      job: {
+        state: 'idle',
+        jobId: null,
+        artifactStem: null,
+        requestedDurationMs: null,
+        activeDurationMs: 0,
+        samplesWritten: 0,
+        droppedBatches: 0,
+        artifactComplete: false,
+        durable: true,
+      },
     },
     polar,
   }
